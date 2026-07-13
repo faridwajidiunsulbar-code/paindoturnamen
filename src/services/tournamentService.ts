@@ -12,27 +12,37 @@ export interface UserProfile {
  */
 export async function getCurrentUser() {
   if (!isSupabaseConfigured) return null;
-  const { data: { user }, error } = await supabase.auth.getUser();
-  if (error || !user) return null;
-  return user;
+  try {
+    const { data: { user }, error } = await supabase.auth.getUser();
+    if (error || !user) return null;
+    return user;
+  } catch (err) {
+    console.error('Error in getCurrentUser:', err);
+    return null;
+  }
 }
 
 export async function getCurrentProfile(): Promise<UserProfile | null> {
   if (!isSupabaseConfigured) return null;
-  const user = await getCurrentUser();
-  if (!user) return null;
+  try {
+    const user = await getCurrentUser();
+    if (!user) return null;
 
-  const { data, error } = await supabase
-    .from('profiles')
-    .select('*')
-    .eq('id', user.id)
-    .single();
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('*')
+      .eq('id', user.id)
+      .single();
 
-  if (error) {
-    console.error('Error fetching profile:', error);
+    if (error) {
+      console.error('Error fetching profile:', error);
+      return null;
+    }
+    return data as UserProfile;
+  } catch (err) {
+    console.error('Error in getCurrentProfile:', err);
     return null;
   }
-  return data as UserProfile;
 }
 
 /**
@@ -542,36 +552,46 @@ export async function loadTournamentFromSupabase(tournamentId: string): Promise<
 export async function listUserTournaments(): Promise<{ id: string; name: string; date: string }[]> {
   if (!isSupabaseConfigured) return [];
   
-  const user = await getCurrentUser();
-  if (!user) return [];
+  try {
+    const user = await getCurrentUser();
+    if (!user) return [];
 
-  const { data, error } = await supabase
-    .from('tournaments')
-    .select('id, name, date')
-    .eq('owner_id', user.id)
-    .order('created_at', { ascending: false });
+    const { data, error } = await supabase
+      .from('tournaments')
+      .select('id, name, date')
+      .eq('owner_id', user.id)
+      .order('created_at', { ascending: false });
 
-  if (error) {
-    console.error('Error listing tournaments:', error);
+    if (error) {
+      console.error('Error listing tournaments:', error);
+      return [];
+    }
+
+    return data || [];
+  } catch (err) {
+    console.error('Error in listUserTournaments:', err);
     return [];
   }
-
-  return data || [];
 }
 
 // Delete tournament from Supabase
 export async function deleteTournamentFromSupabase(tournamentId: string): Promise<boolean> {
   if (!isSupabaseConfigured) return false;
 
-  const { error } = await supabase
-    .from('tournaments')
-    .delete()
-    .eq('id', tournamentId);
+  try {
+    const { error } = await supabase
+      .from('tournaments')
+      .delete()
+      .eq('id', tournamentId);
 
-  if (error) {
-    console.error('Error deleting tournament from Supabase:', error);
+    if (error) {
+      console.error('Error deleting tournament from Supabase:', error);
+      return false;
+    }
+
+    return true;
+  } catch (err) {
+    console.error('Error in deleteTournamentFromSupabase:', err);
     return false;
   }
-
-  return true;
 }

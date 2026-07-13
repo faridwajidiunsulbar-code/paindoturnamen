@@ -1,10 +1,27 @@
 import { createClient } from '@supabase/supabase-js';
 
 const metaEnv = (import.meta as any).env || {};
-const supabaseUrl = metaEnv.VITE_SUPABASE_URL || '';
-const supabaseAnonKey = metaEnv.VITE_SUPABASE_ANON_KEY || metaEnv.VITE_SUPABASE_ANON || metaEnv.VITE_SUPABASE_ANO || '';
+const supabaseUrl = (metaEnv.VITE_SUPABASE_URL || '').trim();
+const supabaseAnonKey = (metaEnv.VITE_SUPABASE_ANON_KEY || metaEnv.VITE_SUPABASE_ANON || metaEnv.VITE_SUPABASE_ANO || '').trim();
 
-export const isSupabaseConfigured = !!(supabaseUrl && supabaseAnonKey);
+const isPlaceholder = (val: string) => {
+  const v = val.toLowerCase();
+  return !v || 
+         v.includes('placeholder') || 
+         v.includes('your_supabase') || 
+         v.includes('your-project') || 
+         v.includes('your_') ||
+         v.includes('project_url') ||
+         v.includes('anon_public_key');
+};
+
+export const isSupabaseConfigured = !!(
+  supabaseUrl && 
+  supabaseAnonKey && 
+  !isPlaceholder(supabaseUrl) && 
+  !isPlaceholder(supabaseAnonKey) &&
+  supabaseUrl.startsWith('http')
+);
 
 if (!isSupabaseConfigured) {
   console.warn(
