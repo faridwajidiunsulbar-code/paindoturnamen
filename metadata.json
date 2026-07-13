@@ -1,0 +1,6 @@
+{
+  "name": "Pickleball Tournament Manager",
+  "description": "A comprehensive, professional-grade pickleball tournament management platform designed for tournament organizers. Supports customizable division matrices, entry registration, manual group seeding, automated round robin round generation, automatic standings with tie-breakers, and knockout brackets.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
