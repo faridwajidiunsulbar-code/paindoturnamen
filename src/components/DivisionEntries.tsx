@@ -598,7 +598,7 @@ export default function DivisionEntries({ division, isDouble, onUpdateDivision, 
                       value={name1}
                       onChange={(e) => setName1(e.target.value)}
                       placeholder="Nama Lengkap"
-                      className="flex-1 px-4 py-2.5 rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-navy/15 text-sm text-slate-800 transition"
+                      className="flex-1 min-w-0 px-4 py-2.5 rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-navy/15 text-sm text-slate-800 transition"
                     />
                     <select
                       onChange={(e) => {
@@ -607,7 +607,7 @@ export default function DivisionEntries({ division, isDouble, onUpdateDivision, 
                           e.target.value = ''; // reset
                         }
                       }}
-                      className="px-2 py-2.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-600 focus:outline-none focus:ring-2 focus:ring-navy/15 cursor-pointer hover:bg-slate-100 transition"
+                      className="w-24 shrink-0 px-2 py-2.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-600 focus:outline-none focus:ring-2 focus:ring-navy/15 cursor-pointer hover:bg-slate-100 transition"
                     >
                       <option value="">Pilih...</option>
                       {poolPlayers.map(p => (
@@ -630,7 +630,7 @@ export default function DivisionEntries({ division, isDouble, onUpdateDivision, 
                         value={name2}
                         onChange={(e) => setName2(e.target.value)}
                         placeholder="Nama Pasangan"
-                        className="flex-1 px-4 py-2.5 rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-navy/15 text-sm text-slate-800 transition"
+                        className="flex-1 min-w-0 px-4 py-2.5 rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-navy/15 text-sm text-slate-800 transition"
                       />
                       <select
                         onChange={(e) => {
@@ -639,7 +639,7 @@ export default function DivisionEntries({ division, isDouble, onUpdateDivision, 
                             e.target.value = ''; // reset
                           }
                         }}
-                        className="px-2 py-2.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-600 focus:outline-none focus:ring-2 focus:ring-navy/15 cursor-pointer hover:bg-slate-100 transition"
+                        className="w-24 shrink-0 px-2 py-2.5 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-slate-600 focus:outline-none focus:ring-2 focus:ring-navy/15 cursor-pointer hover:bg-slate-100 transition"
                       >
                         <option value="">Pilih...</option>
                         {poolPlayers.map(p => (
@@ -738,7 +738,7 @@ export default function DivisionEntries({ division, isDouble, onUpdateDivision, 
                                     id={`edit-player-1-${entry.id}`}
                                     value={editName1}
                                     onChange={(e) => setEditName1(e.target.value)}
-                                    className="px-2 py-1 rounded border border-slate-200 text-sm flex-1 focus:outline-none focus:ring-1 focus:ring-navy"
+                                    className="px-2 py-1 rounded border border-slate-200 text-sm flex-1 min-w-0 focus:outline-none focus:ring-1 focus:ring-navy"
                                     placeholder="Nama Pemain 1"
                                   />
                                   <select
@@ -748,7 +748,7 @@ export default function DivisionEntries({ division, isDouble, onUpdateDivision, 
                                         e.target.value = '';
                                       }
                                     }}
-                                    className="px-1 py-1 bg-slate-50 border border-slate-200 rounded text-xs text-slate-600 focus:outline-none"
+                                    className="w-20 shrink-0 px-1 py-1 bg-slate-50 border border-slate-200 rounded text-xs text-slate-600 focus:outline-none"
                                   >
                                     <option value="">Pilih...</option>
                                     {poolPlayers.map(p => (
@@ -763,7 +763,7 @@ export default function DivisionEntries({ division, isDouble, onUpdateDivision, 
                                       id={`edit-player-2-${entry.id}`}
                                       value={editName2}
                                       onChange={(e) => setEditName2(e.target.value)}
-                                      className="px-2 py-1 rounded border border-slate-200 text-sm flex-1 focus:outline-none focus:ring-1 focus:ring-navy"
+                                      className="px-2 py-1 rounded border border-slate-200 text-sm flex-1 min-w-0 focus:outline-none focus:ring-1 focus:ring-navy"
                                       placeholder="Nama Pemain 2"
                                     />
                                     <select
@@ -773,7 +773,7 @@ export default function DivisionEntries({ division, isDouble, onUpdateDivision, 
                                           e.target.value = '';
                                         }
                                       }}
-                                      className="px-1 py-1 bg-slate-50 border border-slate-200 rounded text-xs text-slate-600 focus:outline-none"
+                                      className="w-20 shrink-0 px-1 py-1 bg-slate-50 border border-slate-200 rounded text-xs text-slate-600 focus:outline-none"
                                     >
                                       <option value="">Pilih...</option>
                                       {poolPlayers.map(p => (
