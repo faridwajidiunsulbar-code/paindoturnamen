@@ -11,7 +11,8 @@ import {
   getCurrentUser, 
   saveTournamentToSupabase, 
   loadTournamentFromSupabase, 
-  listUserTournaments 
+  listUserTournaments,
+  deleteTournamentFromSupabase
 } from './services/tournamentService';
 import AuthModal from './components/AuthModal';
 
@@ -47,7 +48,8 @@ import {
   CheckCircle2,
   AlertCircle,
   Share2,
-  Link
+  Link,
+  Trash2
 } from 'lucide-react';
 
 const LOCAL_STORAGE_KEY = 'pickleball_tournament_data_v1';
@@ -301,6 +303,49 @@ export default function App() {
     showToast('Anda telah keluar dari Akun Cloud.', 'success');
   };
 
+  // Delete current tournament from Supabase and local state safely
+  const handleDeleteCurrentTournament = async () => {
+    if (!user) return;
+    
+    setShowConfirm({
+      title: 'Hapus Turnamen Permanen',
+      message: `Apakah Anda yakin ingin menghapus turnamen "${tournament.name}" ini dari cloud secara permanen? Semua data pendaftaran, grup, skor, dan pertandingan di dalamnya akan dihapus selamanya. Tindakan ini tidak dapat dibatalkan.`,
+      onConfirm: async () => {
+        setIsSyncing('syncing');
+        const success = await deleteTournamentFromSupabase(tournament.id);
+        setShowConfirm(null);
+        if (success) {
+          showToast('Turnamen berhasil dihapus dari cloud!', 'success');
+          
+          // Clear from localStorage too
+          localStorage.removeItem(LOCAL_STORAGE_KEY);
+          
+          // Switch to a fresh new tournament to avoid resyncing the deleted ID
+          const rand = Math.random().toString(36).substring(2, 7);
+          const tId = `t-fresh-${Date.now()}`;
+          const freshTournament: Tournament = {
+            id: tId,
+            name: 'Turnamen Pickleball Baru',
+            date: new Date().toISOString().split('T')[0],
+            location: '',
+            events: DEFAULT_EVENTS.map(ev => ({ ...ev, id: `${ev.id}-${rand}` })),
+            ageGroups: DEFAULT_AGE_GROUPS.map(ag => ({ ...ag, id: `${ag.id}-${rand}` })),
+            activeDivisions: []
+          };
+          setTournament(freshTournament);
+          setSelectedMenu('config');
+          setSelectedDivisionId('');
+          
+          // Refresh list of online tournaments
+          await refreshOnlineTournamentsList();
+        } else {
+          setIsSyncing('error');
+          showToast('Gagal menghapus turnamen dari cloud.', 'error');
+        }
+      }
+    });
+  };
+
   // Quick navigation helpers
   const navigateToDivision = (divisionId: string) => {
     setSelectedDivisionId(divisionId);
@@ -414,6 +459,17 @@ export default function App() {
                     ))}
                   </select>
                 </div>
+              )}
+
+              {user && onlineTournaments.some(t => t.id === tournament.id) && (
+                <button
+                  onClick={handleDeleteCurrentTournament}
+                  className="w-full py-1.5 bg-rose-600/15 hover:bg-rose-600/25 text-rose-400 hover:text-rose-300 border border-rose-500/20 rounded-lg text-[10px] font-black uppercase tracking-wider transition flex items-center justify-center gap-1.5"
+                  id="sidebar-delete-btn"
+                >
+                  <Trash2 className="h-3 w-3" />
+                  <span>Hapus Turnamen dari Cloud</span>
+                </button>
               )}
 
               {/* Share link button */}

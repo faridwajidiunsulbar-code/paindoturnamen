@@ -100,6 +100,26 @@ export async function saveTournamentToSupabase(tournament: Tournament): Promise<
   };
 
   try {
+    // 0. Ensure user has a profile in public.profiles table to prevent foreign key violations on tournament owner_id
+    const { data: profileCheck, error: checkErr } = await supabase
+      .from('profiles')
+      .select('id')
+      .eq('id', user.id)
+      .maybeSingle();
+
+    if (!profileCheck) {
+      const { error: insErr } = await supabase
+        .from('profiles')
+        .upsert({
+          id: user.id,
+          full_name: user.user_metadata?.full_name || user.email || 'Admin',
+          role: 'admin'
+        });
+      if (insErr) {
+        console.warn('Could not auto-create user profile in database:', insErr);
+      }
+    }
+
     // 1. Upsert tournament header
     const { error: tError } = await supabase
       .from('tournaments')
@@ -127,6 +147,22 @@ export async function saveTournamentToSupabase(tournament: Tournament): Promise<
 
     const { error: delMatchError } = await supabase.from('matches').delete().eq('tournament_id', tournament.id);
     if (delMatchError) throw delMatchError;
+
+    // Fetch and delete group_members associated with this tournament's division groups first
+    // to prevent RLS cascade delete errors in PostgreSQL.
+    const { data: existingGroups } = await supabase
+      .from('division_groups')
+      .select('id')
+      .eq('tournament_id', tournament.id);
+
+    if (existingGroups && existingGroups.length > 0) {
+      const groupIds = existingGroups.map(g => g.id);
+      const { error: delGMErr } = await supabase
+        .from('group_members')
+        .delete()
+        .in('group_id', groupIds);
+      if (delGMErr) throw delGMErr;
+    }
 
     const { error: delGroupError } = await supabase.from('division_groups').delete().eq('tournament_id', tournament.id);
     if (delGroupError) throw delGroupError;
@@ -181,9 +217,16 @@ export async function saveTournamentToSupabase(tournament: Tournament): Promise<
     }
 
     // 4. Insert Divisions - de-duplicated by database-scoped ID
-    if (tournament.activeDivisions.length > 0) {
+    // CRITICAL: We only save active divisions that point to currently valid event IDs and age group IDs
+    const validEventIds = new Set(tournament.events.map(ev => ev.id));
+    const validAgeGroupIds = new Set(tournament.ageGroups.map(ag => ag.id));
+    const validActiveDivisions = (tournament.activeDivisions || []).filter(div => 
+      validEventIds.has(div.eventId) && validAgeGroupIds.has(div.ageGroupId)
+    );
+
+    if (validActiveDivisions.length > 0) {
       const uniqueDivisionsMap = new Map<string, any>();
-      tournament.activeDivisions.forEach(div => {
+      validActiveDivisions.forEach(div => {
         const dbId = getDbDivisionId(div.id);
         uniqueDivisionsMap.set(dbId, {
           id: dbId,
@@ -209,7 +252,7 @@ export async function saveTournamentToSupabase(tournament: Tournament): Promise<
 
       // 5. Insert Entries (for all divisions) - de-duplicated by ID
       const uniqueEntriesMap = new Map<string, any>();
-      tournament.activeDivisions.forEach(div => {
+      validActiveDivisions.forEach(div => {
         const dbDivId = getDbDivisionId(div.id);
         div.entries.forEach((ent, index) => {
           uniqueEntriesMap.set(ent.id, {
@@ -232,7 +275,7 @@ export async function saveTournamentToSupabase(tournament: Tournament): Promise<
 
       // 6. Insert Division Groups - de-duplicated by ID
       const uniqueGroupsMap = new Map<string, any>();
-      tournament.activeDivisions.forEach(div => {
+      validActiveDivisions.forEach(div => {
         const dbDivId = getDbDivisionId(div.id);
         div.groups.forEach(g => {
           const dbGrpId = getDbGroupId(g.id, dbDivId);
@@ -252,7 +295,7 @@ export async function saveTournamentToSupabase(tournament: Tournament): Promise<
 
         // 7. Insert Group Members
         const allGroupMembers: any[] = [];
-        tournament.activeDivisions.forEach(div => {
+        validActiveDivisions.forEach(div => {
           const dbDivId = getDbDivisionId(div.id);
           const validEntryIds = new Set(div.entries.map(e => e.id));
           div.groups.forEach(g => {
@@ -277,7 +320,7 @@ export async function saveTournamentToSupabase(tournament: Tournament): Promise<
 
       // 8. Insert Matches (Round Robin + Knockout)
       const uniqueMatchesMap = new Map<string, any>();
-      tournament.activeDivisions.forEach(div => {
+      validActiveDivisions.forEach(div => {
         const dbDivId = getDbDivisionId(div.id);
         const validEntryIds = new Set(div.entries.map(e => e.id));
 
@@ -337,7 +380,7 @@ export async function saveTournamentToSupabase(tournament: Tournament): Promise<
 
       // 9. Insert Knockout Slots (Qualified entry rankings/seeds)
       const allKnockoutSlots: any[] = [];
-      tournament.activeDivisions.forEach(div => {
+      validActiveDivisions.forEach(div => {
         const dbDivId = getDbDivisionId(div.id);
         const validEntryIds = new Set(div.entries.map(e => e.id));
         if (div.knockoutStage && div.knockoutStage.confirmedEntryIds) {
@@ -362,7 +405,7 @@ export async function saveTournamentToSupabase(tournament: Tournament): Promise<
 
       // 10. Insert Champions
       const allChampions: any[] = [];
-      tournament.activeDivisions.forEach(div => {
+      validActiveDivisions.forEach(div => {
         const dbDivId = getDbDivisionId(div.id);
         const validEntryIds = new Set(div.entries.map(e => e.id));
         if (div.champions) {
