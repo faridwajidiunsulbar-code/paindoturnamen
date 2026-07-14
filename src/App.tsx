@@ -313,7 +313,7 @@ export default function App() {
   const isDouble = matchedEvent ? matchedEvent.isDouble : true;
 
   // Differentiate between Admin and Public/Viewer mode
-  const isAdmin = !tournament.ownerId || (user !== null && user.id === tournament.ownerId);
+  const isAdmin = user !== null && (!tournament.ownerId || user.id === tournament.ownerId);
 
   // Safeguard: Reset selectedMenu to dashboard if non-admin tries to view config page
   useEffect(() => {
@@ -441,9 +441,6 @@ export default function App() {
             </div>
           ) : (
             <div className="space-y-2">
-              <p className="text-[10px] text-slate-400 leading-relaxed">
-                Anda berada di <b>Mode Offline (Demo)</b>. Masuk untuk mengaktifkan sinkronisasi multi-device & cloud backup otomatis.
-              </p>
               <div className="grid grid-cols-2 gap-1.5">
                 <button
                   onClick={() => setIsAuthModalOpen(true)}
