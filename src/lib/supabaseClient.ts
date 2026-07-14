@@ -1,8 +1,8 @@
 import { createClient } from '@supabase/supabase-js';
 
 const metaEnv = (import.meta as any).env || {};
-const supabaseUrl = (metaEnv.VITE_SUPABASE_URL || '').trim();
-const supabaseAnonKey = (metaEnv.VITE_SUPABASE_ANON_KEY || metaEnv.VITE_SUPABASE_ANON || metaEnv.VITE_SUPABASE_ANO || '').trim();
+let supabaseUrl = (metaEnv.VITE_SUPABASE_URL || '').trim();
+let supabaseAnonKey = (metaEnv.VITE_SUPABASE_ANON_KEY || metaEnv.VITE_SUPABASE_ANON || metaEnv.VITE_SUPABASE_ANO || '').trim();
 
 const isPlaceholder = (val: string) => {
   const v = val.toLowerCase();
@@ -14,6 +14,14 @@ const isPlaceholder = (val: string) => {
          v.includes('project_url') ||
          v.includes('anon_public_key');
 };
+
+// Fallback to the user's specific Supabase project credentials if environment variables are not set or are placeholders
+if (!supabaseUrl || isPlaceholder(supabaseUrl)) {
+  supabaseUrl = 'https://awvwmveuoamqnbihzrsw.supabase.co';
+}
+if (!supabaseAnonKey || isPlaceholder(supabaseAnonKey)) {
+  supabaseAnonKey = 'sb_publishable_DK-VNwKsaq-WfBdPJ_46rQ_XvLXs_hd';
+}
 
 export const isSupabaseConfigured = !!(
   supabaseUrl && 
