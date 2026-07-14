@@ -19,9 +19,18 @@ export default function DivisionGroups({ division, onUpdateDivision, isAdmin = t
 
   // Local state for editing groups before locking/saving
   const [localGroups, setLocalGroups] = useState<Group[]>(() => {
-    return groups.length > 0 ? groups : [
-      { id: 'grp-a', name: 'Grup A', entryIds: [] },
-      { id: 'grp-b', name: 'Grup B', entryIds: [] }
+    if (groups.length > 0) {
+      // Ensure existing loaded groups have unique IDs to prevent DB constraint clashes
+      return groups.map(g => {
+        if (g.id === 'grp-a' || g.id === 'grp-b') {
+          return { ...g, id: `${g.id}-${division.id}` };
+        }
+        return g;
+      });
+    }
+    return [
+      { id: `grp-a-${division.id}`, name: 'Grup A', entryIds: [] },
+      { id: `grp-b-${division.id}`, name: 'Grup B', entryIds: [] }
     ];
   });
 
