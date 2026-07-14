@@ -315,6 +315,13 @@ export default function App() {
   // Differentiate between Admin and Public/Viewer mode
   const isAdmin = !tournament.ownerId || (user !== null && user.id === tournament.ownerId);
 
+  // Safeguard: Reset selectedMenu to dashboard if non-admin tries to view config page
+  useEffect(() => {
+    if (!isAdmin && selectedMenu === 'config') {
+      setSelectedMenu('dashboard');
+    }
+  }, [isAdmin, selectedMenu]);
+
   return (
     <div className="min-h-screen bg-softbg flex flex-col md:flex-row text-slate-800 font-sans" id="app-container">
       
@@ -480,20 +487,22 @@ export default function App() {
               <ChevronRight className="h-3 w-3 opacity-60" />
             </button>
 
-            <button
-              onClick={() => setSelectedMenu('config')}
-              className={`w-full px-3 py-2.5 rounded-xl text-xs font-semibold flex items-center justify-between transition-all ${
-                selectedMenu === 'config'
-                  ? 'bg-navy-light text-neon shadow-sm font-black border-l-4 border-l-neon'
-                  : 'text-slate-400 hover:text-white hover:bg-navy-light/40'
-              }`}
-              id="nav-config"
-            >
-              <span className="flex items-center gap-2">
-                <Settings className="h-4 w-4" /> Atur Turnamen & Matriks
-              </span>
-              <ChevronRight className="h-3 w-3 opacity-60" />
-            </button>
+            {isAdmin && (
+              <button
+                onClick={() => setSelectedMenu('config')}
+                className={`w-full px-3 py-2.5 rounded-xl text-xs font-semibold flex items-center justify-between transition-all ${
+                  selectedMenu === 'config'
+                    ? 'bg-navy-light text-neon shadow-sm font-black border-l-4 border-l-neon'
+                    : 'text-slate-400 hover:text-white hover:bg-navy-light/40'
+                }`}
+                id="nav-config"
+              >
+                <span className="flex items-center gap-2">
+                  <Settings className="h-4 w-4" /> Atur Turnamen & Matriks
+                </span>
+                <ChevronRight className="h-3 w-3 opacity-60" />
+              </button>
+            )}
           </div>
 
           {/* Section: Daftar Divisi Aktif */}
@@ -502,7 +511,7 @@ export default function App() {
             
             {tournament.activeDivisions.length === 0 ? (
               <p className="px-3 text-xs text-slate-500 italic leading-relaxed">
-                Belum ada divisi aktif. Aktifkan kombinasi di tab Atur Turnamen.
+                {isAdmin ? 'Belum ada divisi aktif. Aktifkan kombinasi di tab Atur Turnamen.' : 'Belum ada divisi pertandingan aktif.'}
               </p>
             ) : (
               <div className="space-y-1" id="sidebar-active-divisions-list">
@@ -578,15 +587,17 @@ export default function App() {
           </div>
 
           <div className="flex items-center gap-3 text-xs text-slate-500 font-medium" id="top-navbar-stats">
-            <button
-              onClick={() => exportTournamentToPDF(tournament)}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-navy hover:bg-navy-light text-neon font-extrabold rounded-lg text-xs transition duration-200 shadow-xs cursor-pointer"
-              title="Ekspor Seluruh Hasil & Hasil Pertandingan ke PDF"
-              id="export-pdf-top-btn"
-            >
-              <Download className="h-3.5 w-3.5" />
-              <span>Unduh PDF</span>
-            </button>
+            {isAdmin && (
+              <button
+                onClick={() => exportTournamentToPDF(tournament)}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-navy hover:bg-navy-light text-neon font-extrabold rounded-lg text-xs transition duration-200 shadow-xs cursor-pointer"
+                title="Ekspor Seluruh Hasil & Hasil Pertandingan ke PDF"
+                id="export-pdf-top-btn"
+              >
+                <Download className="h-3.5 w-3.5" />
+                <span>Unduh PDF</span>
+              </button>
+            )}
             {isSupabaseConfigured && (
               <button
                 onClick={handleShareTournament}
@@ -617,7 +628,7 @@ export default function App() {
         <div className="flex-1 p-6 md:p-8 overflow-y-auto" id="dynamic-content-scroller">
           
           {selectedMenu === 'dashboard' && (
-            <OverallSummary tournament={tournament} onNavigateToDivision={navigateToDivision} />
+            <OverallSummary tournament={tournament} onNavigateToDivision={navigateToDivision} isAdmin={isAdmin} />
           )}
 
           {selectedMenu === 'config' && (

@@ -11,9 +11,10 @@ import { exportTournamentToPDF } from '../utils/pdfExport';
 interface OverallSummaryProps {
   tournament: Tournament;
   onNavigateToDivision?: (divisionId: string) => void;
+  isAdmin?: boolean;
 }
 
-export default function OverallSummary({ tournament, onNavigateToDivision }: OverallSummaryProps) {
+export default function OverallSummary({ tournament, onNavigateToDivision, isAdmin = true }: OverallSummaryProps) {
   const { name, date, location, activeDivisions } = tournament;
 
   // Calculate stats
@@ -74,15 +75,17 @@ export default function OverallSummary({ tournament, onNavigateToDivision }: Ove
           </div>
 
           {/* Export PDF Button */}
-          <button
-            onClick={() => exportTournamentToPDF(tournament)}
-            className="flex items-center gap-2 px-5 py-3 bg-neon text-navy font-black text-xs uppercase tracking-wider rounded-xl transition duration-200 hover:bg-white hover:scale-105 shadow-md shrink-0 self-start border border-navy/10 cursor-pointer"
-            title="Ekspor Seluruh Data Hasil Akhir dan Pertandingan ke PDF"
-            id="export-pdf-hero-btn"
-          >
-            <Download className="h-4 w-4" />
-            <span>Ekspor PDF</span>
-          </button>
+          {isAdmin && (
+            <button
+              onClick={() => exportTournamentToPDF(tournament)}
+              className="flex items-center gap-2 px-5 py-3 bg-neon text-navy font-black text-xs uppercase tracking-wider rounded-xl transition duration-200 hover:bg-white hover:scale-105 shadow-md shrink-0 self-start border border-navy/10 cursor-pointer"
+              title="Ekspor Seluruh Data Hasil Akhir dan Pertandingan ke PDF"
+              id="export-pdf-hero-btn"
+            >
+              <Download className="h-4 w-4" />
+              <span>Ekspor PDF</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -193,7 +196,7 @@ export default function OverallSummary({ tournament, onNavigateToDivision }: Ove
                         className="text-xs font-extrabold text-navy hover:text-navy-light flex items-center gap-0.5 transition hover:underline"
                         id={`navigate-button-${div.id}`}
                       >
-                        Kelola Divisi <Award className="h-3.5 w-3.5 text-neon stroke-navy fill-neon" />
+                        {isAdmin ? 'Kelola Divisi' : 'Lihat Detail Divisi'} <Award className="h-3.5 w-3.5 text-neon stroke-navy fill-neon" />
                       </button>
                     </div>
                   )}
