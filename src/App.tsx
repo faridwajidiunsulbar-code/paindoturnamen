@@ -461,7 +461,7 @@ export default function App() {
                 </div>
               )}
 
-              {user && onlineTournaments.some(t => t.id === tournament.id) && (
+              {user && (onlineTournaments.some(t => t.id === tournament.id) || tournament.id.startsWith('t-')) && (
                 <button
                   onClick={handleDeleteCurrentTournament}
                   className="w-full py-1.5 bg-rose-600/15 hover:bg-rose-600/25 text-rose-400 hover:text-rose-300 border border-rose-500/20 rounded-lg text-[10px] font-black uppercase tracking-wider transition flex items-center justify-center gap-1.5"
