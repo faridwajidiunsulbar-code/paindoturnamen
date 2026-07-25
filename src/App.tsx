@@ -16,6 +16,7 @@ import {
   deleteTournamentFromSupabase
 } from './services/tournamentService';
 import AuthModal from './components/AuthModal';
+import CreateTournamentModal from './components/CreateTournamentModal';
 
 // Component Imports
 import OverallSummary from './components/OverallSummary';
@@ -116,8 +117,7 @@ export default function App() {
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
-        const hasEntries = parsed?.activeDivisions?.some((d: any) => d.entries && d.entries.length > 0);
-        if (hasEntries) {
+        if (parsed && parsed.id && parsed.name) {
           return sanitizeTournamentData(parsed);
         }
       } catch (e) {
@@ -127,9 +127,10 @@ export default function App() {
     return sanitizeTournamentData(getInitialTournament());
   });
 
-  // Supabase states
+  // Supabase & Modal states
   const [user, setUser] = useState<any>(null);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [isSyncing, setIsSyncing] = useState<'idle' | 'syncing' | 'synced' | 'error'>('idle');
   const [onlineTournaments, setOnlineTournaments] = useState<Array<{ id: string; name: string; date: string }>>([]);
   const [showSyncSuccessMsg, setShowSyncSuccessMsg] = useState(false);
@@ -203,24 +204,21 @@ export default function App() {
       };
       loadFromUrl();
     } else if (isSupabaseConfigured) {
-      // Direct access (e.g. root URL): load the most recently created tournament from Supabase if latest has active divisions or if local data is empty
+      // Direct access (e.g. root URL): load the most recently created tournament from Supabase if local data is empty or default
       const loadLatest = async () => {
         setIsSyncing('syncing');
         const latest = await getLatestTournamentFromSupabase();
         
-        let localHasEntries = false;
+        let localHasCustomData = false;
         try {
           const localSaved = localStorage.getItem(LOCAL_STORAGE_KEY);
           const localData = localSaved ? JSON.parse(localSaved) : null;
-          localHasEntries = Boolean(
-            localData?.activeDivisions?.some((d: any) => d.entries && d.entries.length > 0)
-          );
+          localHasCustomData = Boolean(localData && localData.id && localData.name && localData.name !== 'Belum Ada Turnamen');
         } catch (e) {
-          localHasEntries = false;
+          localHasCustomData = false;
         }
 
-        // Only load latest from Supabase on root URL if local data has no entries or if explicitly needed
-        if (latest && !localHasEntries) {
+        if (latest && !localHasCustomData) {
           setTournament(latest);
           setIsSyncing('synced');
           setSelectedMenu('dashboard');
@@ -253,11 +251,13 @@ export default function App() {
 
   // Sync to local storage and Supabase (if logged in)
   useEffect(() => {
-    // 1. Sync to local storage always (offline first)
-    localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(tournament));
+    // 1. Sync to local storage always (offline first) if valid ID
+    if (tournament && tournament.id) {
+      localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(tournament));
+    }
     
-    // 2. Sync to Supabase in the background if logged in
-    if (user && isSupabaseConfigured) {
+    // 2. Sync to Supabase in the background if logged in AND valid tournament ID/name exists
+    if (user && isSupabaseConfigured && tournament && tournament.id && tournament.name !== 'Belum Ada Turnamen') {
       const performSync = async () => {
         setIsSyncing('syncing');
         const success = await saveTournamentToSupabase(tournament);
@@ -317,30 +317,54 @@ export default function App() {
     });
   };
 
-  // Clear tournament data to start clean/fresh
+  // Trigger Create Tournament Modal
   const handleStartFresh = () => {
-    setShowConfirm({
-      title: 'Buat Turnamen Baru',
-      message: 'Apakah Anda yakin ingin membuat Turnamen Baru? Seluruh data yang tersimpan saat ini akan dibersihkan.',
-      onConfirm: () => {
-        const rand = Math.random().toString(36).substring(2, 7);
-        const tId = `t-fresh-${Date.now()}`;
-        const freshTournament: Tournament = {
-          id: tId,
-          name: 'Turnamen Pickleball Baru',
-          date: new Date().toISOString().split('T')[0],
-          location: '',
-          events: DEFAULT_EVENTS.map(ev => ({ ...ev, id: `${ev.id}-${rand}` })),
-          ageGroups: DEFAULT_AGE_GROUPS.map(ag => ({ ...ag, id: `${ag.id}-${rand}` })),
-          activeDivisions: []
-        };
-        setTournament(freshTournament);
-        setSelectedMenu('config');
-        setSelectedDivisionId('');
-        setShowConfirm(null);
-        showToast('Turnamen baru berhasil dibuat!', 'success');
-      }
-    });
+    setIsCreateModalOpen(true);
+  };
+
+  // Handler for creating a new validated tournament from modal
+  const handleCreateTournament = (data: {
+    name: string;
+    date: string;
+    location: string;
+    sportType: 'badminton' | 'pickleball' | 'tennis' | 'table_tennis' | 'other';
+  }) => {
+    const rand = Math.random().toString(36).substring(2, 7);
+    const tId = `t-${Date.now()}`;
+    
+    let events = DEFAULT_EVENTS;
+    if (data.sportType === 'badminton') {
+      events = [
+        { id: `ev-gb-${rand}`, name: 'Ganda Putra (Men\'s Doubles)', isDouble: true },
+        { id: `ev-gw-${rand}`, name: 'Ganda Putri (Women\'s Doubles)', isDouble: true },
+        { id: `ev-mix-${rand}`, name: 'Ganda Campuran (Mixed Doubles)', isDouble: true },
+        { id: `ev-sb-${rand}`, name: 'Tunggal Putra (Men\'s Singles)', isDouble: false }
+      ];
+    } else if (data.sportType === 'pickleball') {
+      events = [
+        { id: `ev-pb-md-${rand}`, name: 'Men\'s Doubles (Ganda Putra)', isDouble: true },
+        { id: `ev-pb-wd-${rand}`, name: 'Women\'s Doubles (Ganda Putri)', isDouble: true },
+        { id: `ev-pb-mix-${rand}`, name: 'Mixed Doubles (Ganda Campuran)', isDouble: true },
+        { id: `ev-pb-ms-${rand}`, name: 'Men\'s Singles (Tunggal Putra)', isDouble: false }
+      ];
+    }
+
+    const newTournament: Tournament = {
+      id: tId,
+      name: data.name,
+      date: data.date,
+      location: data.location || '',
+      events: events.map(ev => ({ ...ev, id: `${ev.id}-${rand}` })),
+      ageGroups: DEFAULT_AGE_GROUPS.map(ag => ({ ...ag, id: `${ag.id}-${rand}` })),
+      activeDivisions: [],
+      ownerId: user?.id
+    };
+
+    setTournament(newTournament);
+    localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(newTournament));
+    setSelectedMenu('config');
+    setSelectedDivisionId('');
+    showToast(`Turnamen baru "${data.name}" berhasil dibuat!`, 'success');
   };
 
   // Load an online tournament from Supabase
@@ -417,32 +441,51 @@ export default function App() {
       message: `Apakah Anda yakin ingin menghapus turnamen "${tournament.name}" ini dari cloud secara permanen? Semua data pendaftaran, grup, skor, dan pertandingan di dalamnya akan dihapus selamanya. Tindakan ini tidak dapat dibatalkan.`,
       onConfirm: async () => {
         setIsSyncing('syncing');
-        const success = await deleteTournamentFromSupabase(tournament.id);
+        const deletedId = tournament.id;
+        const success = await deleteTournamentFromSupabase(deletedId);
         setShowConfirm(null);
+        
         if (success) {
-          showToast('Turnamen berhasil dihapus dari cloud!', 'success');
-          
-          // Clear from localStorage too
           localStorage.removeItem(LOCAL_STORAGE_KEY);
           
-          // Switch to a fresh new tournament to avoid resyncing the deleted ID
-          const rand = Math.random().toString(36).substring(2, 7);
-          const tId = `t-fresh-${Date.now()}`;
-          const freshTournament: Tournament = {
-            id: tId,
-            name: 'Turnamen Pickleball Baru',
-            date: new Date().toISOString().split('T')[0],
-            location: '',
-            events: DEFAULT_EVENTS.map(ev => ({ ...ev, id: `${ev.id}-${rand}` })),
-            ageGroups: DEFAULT_AGE_GROUPS.map(ag => ({ ...ag, id: `${ag.id}-${rand}` })),
-            activeDivisions: []
-          };
-          setTournament(freshTournament);
-          setSelectedMenu('config');
-          setSelectedDivisionId('');
-          
-          // Refresh list of online tournaments
-          await refreshOnlineTournamentsList();
+          // Refresh list of remaining user tournaments
+          const remainingList = await listUserTournaments();
+          setOnlineTournaments(remainingList);
+
+          if (remainingList && remainingList.length > 0) {
+            // Automatically switch to the most recent remaining tournament
+            const latestRemainingId = remainingList[0].id;
+            const loaded = await loadTournamentFromSupabase(latestRemainingId);
+            if (loaded) {
+              setTournament(loaded);
+              setIsSyncing('synced');
+              setSelectedMenu('dashboard');
+              if (loaded.activeDivisions && loaded.activeDivisions.length > 0) {
+                setSelectedDivisionId(loaded.activeDivisions[0].id);
+              } else {
+                setSelectedDivisionId('');
+              }
+              showToast(`Turnamen berhasil dihapus dari cloud. Menampilkan turnamen tersisa: "${loaded.name}"`, 'success');
+            } else {
+              setIsSyncing('idle');
+            }
+          } else {
+            // No remaining tournaments left in cloud! Reset to empty state without auto-generating dummy
+            const emptyTemplate: Tournament = {
+              id: '',
+              name: 'Belum Ada Turnamen',
+              date: new Date().toISOString().split('T')[0],
+              location: '',
+              events: [],
+              ageGroups: [],
+              activeDivisions: []
+            };
+            setTournament(emptyTemplate);
+            setIsSyncing('idle');
+            setSelectedMenu('config');
+            setSelectedDivisionId('');
+            showToast('Turnamen berhasil dihapus dari cloud. Tidak ada turnamen tersisa.', 'info');
+          }
         } else {
           setIsSyncing('error');
           showToast('Gagal menghapus turnamen dari cloud.', 'error');
@@ -944,6 +987,13 @@ export default function App() {
         isOpen={isAuthModalOpen}
         onClose={() => setIsAuthModalOpen(false)}
         onAuthSuccess={refreshOnlineTournamentsList}
+      />
+
+      {/* Create Tournament Modal Overlay */}
+      <CreateTournamentModal
+        isOpen={isCreateModalOpen}
+        onClose={() => setIsCreateModalOpen(false)}
+        onCreate={handleCreateTournament}
       />
 
       {showConfirm && (
