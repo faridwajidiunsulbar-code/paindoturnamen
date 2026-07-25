@@ -11,6 +11,7 @@ import {
   getCurrentUser, 
   saveTournamentToSupabase, 
   loadTournamentFromSupabase, 
+  getLatestTournamentFromSupabase,
   listUserTournaments,
   deleteTournamentFromSupabase
 } from './services/tournamentService';
@@ -88,14 +89,20 @@ export default function App() {
     return timer;
   };
 
+  const initialDivId = tournament.activeDivisions && tournament.activeDivisions.length > 0 
+    ? tournament.activeDivisions[0].id 
+    : '';
+
   // Navigation Menu: 'dashboard' | 'config' | 'div-detail'
-  const [selectedMenu, setSelectedMenu] = useState<'dashboard' | 'config' | 'div-detail'>('dashboard');
+  const [selectedMenu, setSelectedMenu] = useState<'dashboard' | 'config' | 'div-detail'>(
+    initialDivId ? 'div-detail' : 'dashboard'
+  );
   
   // Selected Division ID for 'div-detail' view
-  const [selectedDivisionId, setSelectedDivisionId] = useState<string>('');
+  const [selectedDivisionId, setSelectedDivisionId] = useState<string>(initialDivId);
   
   // Sub-tabs inside division details: 'entries' | 'groups' | 'round-robin' | 'knockout'
-  const [divisionTab, setDivisionTab] = useState<'entries' | 'groups' | 'round-robin' | 'knockout'>('entries');
+  const [divisionTab, setDivisionTab] = useState<'entries' | 'groups' | 'round-robin' | 'knockout'>('groups');
 
   // Track Auth Session on startup
   useEffect(() => {
@@ -113,10 +120,11 @@ export default function App() {
     }
   }, []);
 
-  // Load tournament from URL query parameter on load
+  // Load tournament from URL query parameter or fetch the latest created tournament on load
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const urlTId = params.get('t') || params.get('id');
+
     if (urlTId && isSupabaseConfigured) {
       const loadFromUrl = async () => {
         setIsSyncing('syncing');
@@ -124,8 +132,14 @@ export default function App() {
         if (loaded) {
           setTournament(loaded);
           setIsSyncing('synced');
-          setSelectedMenu('dashboard');
-          setSelectedDivisionId('');
+          if (loaded.activeDivisions && loaded.activeDivisions.length > 0) {
+            setSelectedDivisionId(loaded.activeDivisions[0].id);
+            setSelectedMenu('div-detail');
+            setDivisionTab('groups');
+          } else {
+            setSelectedMenu('dashboard');
+            setSelectedDivisionId('');
+          }
           showToast('Turnamen berhasil dimuat dari tautan cloud!', 'success');
         } else {
           setIsSyncing('error');
@@ -133,6 +147,27 @@ export default function App() {
         }
       };
       loadFromUrl();
+    } else if (isSupabaseConfigured) {
+      // Direct access (e.g. root URL): load the most recently created tournament from Supabase
+      const loadLatest = async () => {
+        setIsSyncing('syncing');
+        const latest = await getLatestTournamentFromSupabase();
+        if (latest) {
+          setTournament(latest);
+          setIsSyncing('synced');
+          if (latest.activeDivisions && latest.activeDivisions.length > 0) {
+            setSelectedDivisionId(latest.activeDivisions[0].id);
+            setSelectedMenu('div-detail');
+            setDivisionTab('groups');
+          } else {
+            setSelectedMenu('dashboard');
+            setSelectedDivisionId('');
+          }
+        } else {
+          setIsSyncing('idle');
+        }
+      };
+      loadLatest();
     }
   }, []);
 
@@ -250,8 +285,14 @@ export default function App() {
     if (loaded) {
       setTournament(loaded);
       setIsSyncing('synced');
-      setSelectedMenu('dashboard');
-      setSelectedDivisionId('');
+      if (loaded.activeDivisions && loaded.activeDivisions.length > 0) {
+        setSelectedDivisionId(loaded.activeDivisions[0].id);
+        setSelectedMenu('div-detail');
+        setDivisionTab('groups');
+      } else {
+        setSelectedMenu('dashboard');
+        setSelectedDivisionId('');
+      }
       showToast('Berhasil memuat turnamen dari cloud!', 'success');
     } else {
       setIsSyncing('error');
@@ -350,7 +391,7 @@ export default function App() {
   const navigateToDivision = (divisionId: string) => {
     setSelectedDivisionId(divisionId);
     setSelectedMenu('div-detail');
-    setDivisionTab('entries');
+    setDivisionTab('groups');
   };
 
   const currentDiv = tournament.activeDivisions.find(div => div.id === selectedDivisionId);

@@ -707,3 +707,27 @@ export async function deleteTournamentFromSupabase(tournamentId: string): Promis
     return false;
   }
 }
+
+// Fetch the single most recently created tournament from Supabase
+export async function getLatestTournamentFromSupabase(): Promise<Tournament | null> {
+  if (!isSupabaseConfigured) return null;
+
+  try {
+    const { data, error } = await supabase
+      .from('tournaments')
+      .select('id')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (error || !data || !data.id) {
+      console.warn('No tournament found or error fetching latest:', error);
+      return null;
+    }
+
+    return await loadTournamentFromSupabase(data.id);
+  } catch (err) {
+    console.error('Error in getLatestTournamentFromSupabase:', err);
+    return null;
+  }
+}
