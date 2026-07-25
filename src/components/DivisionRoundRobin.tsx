@@ -5,8 +5,9 @@
 
 import React, { useState } from 'react';
 import { Division, Match, Entry, GroupStandingRow } from '../types';
-import { calculateGroupStandings } from '../utils/tournamentHelpers';
-import { Award, Check, Eye, Edit3, Circle, ClipboardCheck, Trophy, RefreshCw, X, AlertCircle } from 'lucide-react';
+import { calculateGroupStandings, generateRoundRobinMatches } from '../utils/tournamentHelpers';
+import { createGandaPutraDivisionFromImage } from '../data/imageDataPreset';
+import { Award, Check, Eye, Edit3, Circle, ClipboardCheck, Trophy, RefreshCw, X, AlertCircle, Play, Sparkles } from 'lucide-react';
 
 interface DivisionRoundRobinProps {
   division: Division;
@@ -39,6 +40,27 @@ export default function DivisionRoundRobin({ division, onUpdateDivision, isAdmin
     title: string;
     message: string;
   } | null>(null);
+
+  // Generate matches if groups exist
+  const handleGenerateMatchesDirectly = () => {
+    if (groups.length === 0) return;
+    let allMatches: Match[] = [];
+    groups.forEach(g => {
+      const groupMatches = generateRoundRobinMatches(division.id, g, entries);
+      allMatches = [...allMatches, ...groupMatches];
+    });
+    onUpdateDivision({
+      ...division,
+      roundRobinMatches: allMatches
+    });
+  };
+
+  // Import 17 pairs preset if division is empty
+  const handleImportImageData = () => {
+    const rand = Math.random().toString(36).substring(2, 7);
+    const newDiv = createGandaPutraDivisionFromImage(rand, division.eventId, division.ageGroupId);
+    onUpdateDivision(newDiv);
+  };
 
   // Calculate standings for each group
   const standingsByGroup: Record<string, GroupStandingRow[]> = {};
@@ -189,7 +211,24 @@ export default function DivisionRoundRobin({ division, onUpdateDivision, isAdmin
 
   // Filtered matches
   const filteredMatches = roundRobinMatches.filter(m => {
-    const groupMatch = selectedGroupFilter === 'all' || m.groupName === selectedGroupFilter;
+    let groupMatch = selectedGroupFilter === 'all';
+    if (!groupMatch) {
+      if (m.groupName === selectedGroupFilter) {
+        groupMatch = true;
+      } else if (m.groupName) {
+        const selNorm = selectedGroupFilter.replace(/^(grup|pool)\s+/i, '').trim().toLowerCase();
+        const mNorm = m.groupName.replace(/^(grup|pool)\s+/i, '').trim().toLowerCase();
+        if (selNorm === mNorm) groupMatch = true;
+      }
+      // Fallback check by entry membership if selectedGroupFilter is a group name
+      if (!groupMatch) {
+        const targetGrp = groups.find(g => g.name === selectedGroupFilter);
+        if (targetGrp && m.entryId1 && m.entryId2 && targetGrp.entryIds.includes(m.entryId1) && targetGrp.entryIds.includes(m.entryId2)) {
+          groupMatch = true;
+        }
+      }
+    }
+
     const statusMatch = selectedStatusFilter === 'all' || 
       (selectedStatusFilter === 'played' && m.status !== 'belum_dimainkan') ||
       (selectedStatusFilter === 'unplayed' && m.status === 'belum_dimainkan');
@@ -206,10 +245,39 @@ export default function DivisionRoundRobin({ division, onUpdateDivision, isAdmin
   return (
     <div className="space-y-8 animate-fade-in" id="division-round-robin-panel">
       {roundRobinMatches.length === 0 ? (
-        <div className="text-center py-16 bg-white rounded-2xl border border-slate-150 p-6 card-shadow" id="empty-rr-matches">
-          <ClipboardCheck className="h-12 w-12 text-slate-300 mx-auto mb-3" />
-          <p className="text-base font-extrabold text-slate-700">Jadwal Round Robin belum di-generate.</p>
-          <p className="text-sm text-slate-400 mt-1">Harap bagi grup terlebih dahulu di tab "Pembagian Grup" lalu klik "Generate Jadwal".</p>
+        <div className="text-center py-16 bg-white rounded-2xl border border-slate-150 p-8 card-shadow space-y-5" id="empty-rr-matches">
+          <div className="w-16 h-16 bg-navy/5 text-navy rounded-full flex items-center justify-center mx-auto border border-navy/10">
+            <ClipboardCheck className="h-8 w-8 text-navy" />
+          </div>
+          <div>
+            <p className="text-lg font-black text-navy">Jadwal Round Robin Belum Di-generate</p>
+            <p className="text-xs text-slate-500 max-w-md mx-auto mt-1 leading-relaxed">
+              Divisi <strong className="text-navy">{division.eventName} ({division.ageGroupName})</strong> saat ini belum memiliki jadwal pertandingan.
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
+            {groups.length > 0 && groups.some(g => g.entryIds.length >= 2) && (
+              <button
+                type="button"
+                onClick={handleGenerateMatchesDirectly}
+                className="px-5 py-2.5 bg-navy hover:bg-navy-light text-neon rounded-xl font-black text-xs flex items-center gap-2 transition card-shadow shadow-xs hover:-translate-y-0.5"
+              >
+                <Play className="h-4 w-4 fill-neon" /> Generate Jadwal Match dari {groups.length} Pool
+              </button>
+            )}
+
+            {isAdmin && (
+              <button
+                type="button"
+                onClick={handleImportImageData}
+                className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-black text-xs flex items-center gap-2 transition card-shadow shadow-xs hover:-translate-y-0.5"
+                title="Impor 17 Pasangan ganda & Pool A-D dari catatan gambar"
+              >
+                <Sparkles className="h-4 w-4 text-emerald-200" /> Impor Data Gambar (17 Pasang / Pool A-D)
+              </button>
+            )}
+          </div>
         </div>
       ) : (
         <div className="grid grid-cols-1 xl:grid-cols-12 gap-8" id="rr-layout-grid">

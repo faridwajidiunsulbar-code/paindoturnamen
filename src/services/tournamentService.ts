@@ -276,15 +276,18 @@ export async function saveTournamentToSupabase(tournament: Tournament): Promise<
       validActiveDivisions.forEach(div => {
         const dbDivId = getDbDivisionId(div.id);
         div.entries.forEach((ent, index) => {
-          uniqueEntriesMap.set(ent.id, {
-            id: ent.id,
-            tournament_id: tournament.id,
-            division_id: dbDivId,
-            player1_name: ent.name1,
-            player2_name: ent.name2 || null,
-            club: ent.affiliation || null,
-            seed: index + 1
-          });
+          const cleanedId = cleanEntryId(ent.id);
+          if (cleanedId) {
+            uniqueEntriesMap.set(cleanedId, {
+              id: cleanedId,
+              tournament_id: tournament.id,
+              division_id: dbDivId,
+              player1_name: ent.name1,
+              player2_name: ent.name2 || null,
+              club: ent.affiliation || null,
+              seed: index + 1
+            });
+          }
         });
       });
 
@@ -293,6 +296,9 @@ export async function saveTournamentToSupabase(tournament: Tournament): Promise<
         const { error: entError } = await supabase.from('entries').insert(allEntries);
         if (entError) throw entError;
       }
+
+      // Master set of all entry IDs actually inserted into the database
+      const insertedEntryIds = new Set(allEntries.map(e => e.id));
 
       // 6. Insert Division Groups - de-duplicated by ID
       const uniqueGroupsMap = new Map<string, any>();
@@ -304,7 +310,7 @@ export async function saveTournamentToSupabase(tournament: Tournament): Promise<
             id: dbGrpId,
             tournament_id: tournament.id,
             division_id: dbDivId,
-            name: g.name.replace('Grup ', '') // Save as 'A', 'B', etc.
+            name: g.name // Save exact group name as is (e.g. 'Pool A' or 'Grup A')
           });
         });
       });
@@ -314,17 +320,17 @@ export async function saveTournamentToSupabase(tournament: Tournament): Promise<
         const { error: gError } = await supabase.from('division_groups').insert(allGroups);
         if (gError) throw gError;
 
-        // 7. Insert Group Members
-        const allGroupMembers: any[] = [];
+        // 7. Insert Group Members (de-duplicated & verified against insertedEntryIds)
+        const groupMembersMap = new Map<string, any>();
         validActiveDivisions.forEach(div => {
           const dbDivId = getDbDivisionId(div.id);
-          const validEntryIds = new Set(div.entries.map(e => e.id));
           div.groups.forEach(g => {
             const dbGrpId = getDbGroupId(g.id, dbDivId);
             g.entryIds.forEach(entId => {
-              const cleanedId = getValidEntryId(entId, validEntryIds);
+              const cleanedId = getValidEntryId(entId, insertedEntryIds);
               if (cleanedId) {
-                allGroupMembers.push({
+                const gmKey = `${dbGrpId}_${cleanedId}`;
+                groupMembersMap.set(gmKey, {
                   group_id: dbGrpId,
                   entry_id: cleanedId
                 });
@@ -333,6 +339,7 @@ export async function saveTournamentToSupabase(tournament: Tournament): Promise<
           });
         });
 
+        const allGroupMembers = Array.from(groupMembersMap.values());
         if (allGroupMembers.length > 0) {
           const { error: gmError } = await supabase.from('group_members').insert(allGroupMembers);
           if (gmError) throw gmError;
@@ -343,7 +350,6 @@ export async function saveTournamentToSupabase(tournament: Tournament): Promise<
       const uniqueMatchesMap = new Map<string, any>();
       validActiveDivisions.forEach(div => {
         const dbDivId = getDbDivisionId(div.id);
-        const validEntryIds = new Set(div.entries.map(e => e.id));
 
         // Round Robin Matches
         div.roundRobinMatches.forEach((m, index) => {
@@ -357,12 +363,12 @@ export async function saveTournamentToSupabase(tournament: Tournament): Promise<
             stage: 'round_robin',
             round: m.groupName || 'Round Robin',
             match_no: m.matchNum || index + 1,
-            entry_a_id: getValidEntryId(m.entryId1, validEntryIds),
-            entry_b_id: getValidEntryId(m.entryId2, validEntryIds),
+            entry_a_id: getValidEntryId(m.entryId1, insertedEntryIds),
+            entry_b_id: getValidEntryId(m.entryId2, insertedEntryIds),
             score_a: m.score1,
             score_b: m.score2,
-            winner_entry_id: getValidEntryId(m.winnerId, validEntryIds),
-            loser_entry_id: getValidEntryId(m.loserId, validEntryIds),
+            winner_entry_id: getValidEntryId(m.winnerId, insertedEntryIds),
+            loser_entry_id: getValidEntryId(m.loserId, insertedEntryIds),
             status: m.status === 'selesai' ? 'completed' : (m.status === 'walkover' ? 'walkover' : 'scheduled'),
             is_walkover: m.status === 'walkover'
           });
@@ -379,12 +385,12 @@ export async function saveTournamentToSupabase(tournament: Tournament): Promise<
               stage: m.isBronzeMatch ? 'bronze' : (m.roundName === 'Final' ? 'final' : 'knockout'),
               round: m.roundName || 'Knockout',
               match_no: m.matchNum || index + 100,
-              entry_a_id: getValidEntryId(m.entryId1, validEntryIds),
-              entry_b_id: getValidEntryId(m.entryId2, validEntryIds),
+              entry_a_id: getValidEntryId(m.entryId1, insertedEntryIds),
+              entry_b_id: getValidEntryId(m.entryId2, insertedEntryIds),
               score_a: m.score1,
               score_b: m.score2,
-              winner_entry_id: getValidEntryId(m.winnerId, validEntryIds),
-              loser_entry_id: getValidEntryId(m.loserId, validEntryIds),
+              winner_entry_id: getValidEntryId(m.winnerId, insertedEntryIds),
+              loser_entry_id: getValidEntryId(m.loserId, insertedEntryIds),
               status: m.status === 'selesai' ? 'completed' : (m.status === 'walkover' ? 'walkover' : 'scheduled'),
               is_walkover: m.status === 'walkover',
               next_match_id: null,
@@ -403,14 +409,13 @@ export async function saveTournamentToSupabase(tournament: Tournament): Promise<
       const allKnockoutSlots: any[] = [];
       validActiveDivisions.forEach(div => {
         const dbDivId = getDbDivisionId(div.id);
-        const validEntryIds = new Set(div.entries.map(e => e.id));
         if (div.knockoutStage && div.knockoutStage.confirmedEntryIds) {
           div.knockoutStage.confirmedEntryIds.forEach((entId, idx) => {
             allKnockoutSlots.push({
               tournament_id: tournament.id,
               division_id: dbDivId,
               seed_no: idx + 1,
-              entry_id: getValidEntryId(entId, validEntryIds),
+              entry_id: getValidEntryId(entId, insertedEntryIds),
               source_label: `Seed ${idx + 1}`,
               is_wildcard: false,
               is_bye: entId === 'BYE'
@@ -428,15 +433,14 @@ export async function saveTournamentToSupabase(tournament: Tournament): Promise<
       const allChampions: any[] = [];
       validActiveDivisions.forEach(div => {
         const dbDivId = getDbDivisionId(div.id);
-        const validEntryIds = new Set(div.entries.map(e => e.id));
         if (div.champions) {
           allChampions.push({
             id: `c-${dbDivId}`,
             tournament_id: tournament.id,
             division_id: dbDivId,
-            champion_entry_id: getValidEntryId(div.champions.firstPlaceEntryId, validEntryIds),
-            runner_up_entry_id: getValidEntryId(div.champions.secondPlaceEntryId, validEntryIds),
-            third_place_entry_id: getValidEntryId(div.champions.thirdPlaceEntryId, validEntryIds)
+            champion_entry_id: getValidEntryId(div.champions.firstPlaceEntryId, insertedEntryIds),
+            runner_up_entry_id: getValidEntryId(div.champions.secondPlaceEntryId, insertedEntryIds),
+            third_place_entry_id: getValidEntryId(div.champions.thirdPlaceEntryId, insertedEntryIds)
           });
         }
       });
@@ -564,9 +568,14 @@ export async function loadTournamentFromSupabase(tournamentId: string): Promise<
           const memberIds = gmData
             .filter(gm => gm.group_id === g.id)
             .map(gm => gm.entry_id);
+          const dbName = g.name || '';
+          let groupName = dbName;
+          if (!dbName.toLowerCase().startsWith('grup') && !dbName.toLowerCase().startsWith('pool')) {
+            groupName = dbName.length <= 2 ? `Grup ${dbName}` : dbName;
+          }
           return {
             id: g.id,
-            name: `Grup ${g.name}`,
+            name: groupName,
             entryIds: memberIds
           };
         });

@@ -6,7 +6,8 @@
 import React, { useState, useEffect } from 'react';
 import { Division, Group, Entry, Match } from '../types';
 import { generateRoundRobinMatches } from '../utils/tournamentHelpers';
-import { Plus, Trash2, ArrowRight, X, Play, RefreshCw, AlertCircle, HelpCircle } from 'lucide-react';
+import { createGandaPutraDivisionFromImage } from '../data/imageDataPreset';
+import { Plus, Trash2, ArrowRight, X, Play, RefreshCw, AlertCircle, HelpCircle, Sparkles } from 'lucide-react';
 
 interface DivisionGroupsProps {
   division: Division;
@@ -165,6 +166,17 @@ export default function DivisionGroups({ division, onUpdateDivision, isAdmin = t
     });
   };
 
+  // Import 17 pairs and Pool A-D from the image note
+  const handleImportImageData = () => {
+    const rand = Math.random().toString(36).substring(2, 7);
+    const newDiv = createGandaPutraDivisionFromImage(rand, division.eventId, division.ageGroupId);
+    onUpdateDivision(newDiv);
+    setShowAlert({
+      title: 'Data Berhasil Dimuat! 🎯',
+      message: '17 Pasangan ganda dan 4 Pool (Pool A, Pool B, Pool C, Pool D) dari catatan gambar telah berhasil dimasukkan lengkap dengan jadwal pertandingannya.'
+    });
+  };
+
   // Lock groups and generate round robin matches
   const handleLockAndGenerate = () => {
     // 1. Validation
@@ -253,6 +265,15 @@ export default function DivisionGroups({ division, onUpdateDivision, isAdmin = t
         
         {isAdmin && (
           <div className="flex gap-2 flex-wrap md:self-center">
+            <button
+              type="button"
+              onClick={handleImportImageData}
+              className="px-3.5 py-2 bg-navy hover:bg-navy-light text-neon border border-neon/30 rounded-lg text-xs font-black transition flex items-center gap-1.5 card-shadow"
+              id="import-image-data-button"
+              title="Muat 17 Pasangan & Pembagian Pool A-D dari Catatan Gambar"
+            >
+              <Sparkles className="h-3.5 w-3.5 text-neon" /> 📷 Impor Data Gambar (Pool A-D)
+            </button>
             {unassignedEntries.length > 0 && (
               <button
                 type="button"

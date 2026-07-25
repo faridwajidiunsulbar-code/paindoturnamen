@@ -50,7 +50,25 @@ export function calculateGroupStandings(
   matches: Match[],
   entries: Entry[]
 ): GroupStandingRow[] {
-  const groupMatches = matches.filter(m => m.groupName === group.name && m.type === 'ROUND_ROBIN');
+  // Robust match filtering for group: match by entry IDs or group name
+  const groupMatches = matches.filter(m => {
+    if (m.type && m.type !== 'ROUND_ROBIN' && m.type !== ('ROUND_ROBIN' as any)) return false;
+
+    // 1. Check if both entries in match belong to this group's entry list
+    if (m.entryId1 && m.entryId2 && group.entryIds.includes(m.entryId1) && group.entryIds.includes(m.entryId2)) {
+      return true;
+    }
+
+    // 2. Check by group name comparison (case-insensitive & ignoring "Grup"/"Pool" prefix)
+    if (m.groupName && group.name) {
+      if (m.groupName === group.name) return true;
+      const mNorm = m.groupName.replace(/^(grup|pool)\s+/i, '').trim().toLowerCase();
+      const gNorm = group.name.replace(/^(grup|pool)\s+/i, '').trim().toLowerCase();
+      if (mNorm === gNorm) return true;
+    }
+
+    return false;
+  });
   const standingsMap: Record<string, GroupStandingRow> = {};
 
   // Initialize standings for all entries in the group

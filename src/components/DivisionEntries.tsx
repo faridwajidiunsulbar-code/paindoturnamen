@@ -6,6 +6,7 @@
 import React, { useState } from 'react';
 import { Division, Entry, DivisionSettings } from '../types';
 import { Settings, Users, Plus, Trash2, Edit2, Check, ShieldAlert, Shuffle, Sparkles, UserCheck } from 'lucide-react';
+import { createGandaPutraDivisionFromImage } from '../data/imageDataPreset';
 
 export const PAINDO_PLAYERS = [
   'Farid', 'Iswan', 'Nadja', 'Noor Irwandi', 'Akram', 'Haedar', 'Amri', 'Pandi', 
@@ -229,6 +230,17 @@ export default function DivisionEntries({ division, isDouble, onUpdateDivision, 
       roundRobinMatches: [],
       knockoutStage: null,
       champions: null
+    });
+  };
+
+  // Import 17 pairs and Pool A-D from the image note
+  const handleImportImageData = () => {
+    const rand = Math.random().toString(36).substring(2, 7);
+    const newDiv = createGandaPutraDivisionFromImage(rand, division.eventId, division.ageGroupId);
+    onUpdateDivision(newDiv);
+    setShowAlert({
+      title: 'Data Berhasil Dimuat! 🎯',
+      message: '17 Pasangan ganda dan 4 Pool (Pool A, Pool B, Pool C, Pool D) dari catatan gambar telah berhasil dimasukkan lengkap dengan jadwal pertandingannya.'
     });
   };
 
@@ -727,11 +739,21 @@ export default function DivisionEntries({ division, isDouble, onUpdateDivision, 
         {/* LIST OF ENTRIES */}
         <div className={isAdmin ? "lg:col-span-2" : "lg:col-span-3"} id="entries-list-panel">
           <div className="bg-white rounded-2xl border border-slate-150 p-6 card-shadow">
-            <div className="flex items-center justify-between mb-4">
+            <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
               <h3 className="text-base font-extrabold text-navy flex items-center gap-2">
                 <Users className="h-5 w-5 text-neon stroke-navy fill-neon" />
                 Daftar Peserta Terdaftar ({division.entries.length})
               </h3>
+              {isAdmin && (
+                <button
+                  type="button"
+                  onClick={handleImportImageData}
+                  className="px-3.5 py-2 bg-navy hover:bg-navy-light text-neon border border-neon/30 rounded-xl font-black text-xs flex items-center gap-2 transition card-shadow shadow-xs hover:-translate-y-0.5"
+                  title="Muat 17 Pasangan & Pembagian Pool A-D dari Catatan Gambar"
+                >
+                  <Sparkles className="h-4 w-4 text-neon" /> 📷 Impor Data Gambar (17 Pasang / Pool A-D)
+                </button>
+              )}
             </div>
 
             {division.entries.length === 0 ? (

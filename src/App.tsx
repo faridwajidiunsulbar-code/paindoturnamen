@@ -25,6 +25,61 @@ import DivisionGroups from './components/DivisionGroups';
 import DivisionRoundRobin from './components/DivisionRoundRobin';
 import DivisionKnockout from './components/DivisionKnockout';
 import { exportTournamentToPDF } from './utils/pdfExport';
+import { generateRoundRobinMatches } from './utils/tournamentHelpers';
+import { Match } from './types';
+
+function sanitizeTournamentData(t: Tournament): Tournament {
+  if (!t || !t.activeDivisions) return t;
+
+  const sanitizedDivisions = t.activeDivisions.map(div => {
+    // 1. Sanitize group names (remove duplicate "Grup Pool " -> "Pool ")
+    const cleanGroups = (div.groups || []).map(g => {
+      let cleanName = g.name || '';
+      if (cleanName.startsWith('Grup Pool ')) {
+        cleanName = cleanName.replace('Grup Pool ', 'Pool ');
+      } else if (cleanName.startsWith('Grup Grup ')) {
+        cleanName = cleanName.replace('Grup Grup ', 'Grup ');
+      }
+      return { ...g, name: cleanName };
+    });
+
+    // 2. Check if roundRobinMatches exist or need auto-generating/updating
+    let matches = div.roundRobinMatches || [];
+
+    // If matches are empty but groups with assigned entries exist, auto-generate matches
+    if (matches.length === 0 && cleanGroups.length > 0 && cleanGroups.some(g => g.entryIds.length >= 2)) {
+      let autoMatches: Match[] = [];
+      cleanGroups.forEach(g => {
+        const groupMatches = generateRoundRobinMatches(div.id, g, div.entries || []);
+        autoMatches = [...autoMatches, ...groupMatches];
+      });
+      matches = autoMatches;
+    } else {
+      // Align match groupName with clean group names if needed
+      matches = matches.map(m => {
+        if (!m.groupName) return m;
+        let mGroupName = m.groupName;
+        if (mGroupName.startsWith('Grup Pool ')) {
+          mGroupName = mGroupName.replace('Grup Pool ', 'Pool ');
+        } else if (mGroupName.startsWith('Grup Grup ')) {
+          mGroupName = mGroupName.replace('Grup Grup ', 'Grup ');
+        }
+        return { ...m, groupName: mGroupName };
+      });
+    }
+
+    return {
+      ...div,
+      groups: cleanGroups,
+      roundRobinMatches: matches
+    };
+  });
+
+  return {
+    ...t,
+    activeDivisions: sanitizedDivisions
+  };
+}
 
 // Icons
 import {
@@ -60,12 +115,16 @@ export default function App() {
     const saved = localStorage.getItem(LOCAL_STORAGE_KEY);
     if (saved) {
       try {
-        return JSON.parse(saved);
+        const parsed = JSON.parse(saved);
+        const hasEntries = parsed?.activeDivisions?.some((d: any) => d.entries && d.entries.length > 0);
+        if (hasEntries) {
+          return sanitizeTournamentData(parsed);
+        }
       } catch (e) {
         console.error('Error parsing tournament data from localStorage', e);
       }
     }
-    return getInitialTournament();
+    return sanitizeTournamentData(getInitialTournament());
   });
 
   // Supabase states
@@ -149,16 +208,19 @@ export default function App() {
         setIsSyncing('syncing');
         const latest = await getLatestTournamentFromSupabase();
         
-        let localHasDivisions = false;
+        let localHasEntries = false;
         try {
           const localSaved = localStorage.getItem(LOCAL_STORAGE_KEY);
           const localData = localSaved ? JSON.parse(localSaved) : null;
-          localHasDivisions = Boolean(localData?.activeDivisions && localData.activeDivisions.length > 0);
+          localHasEntries = Boolean(
+            localData?.activeDivisions?.some((d: any) => d.entries && d.entries.length > 0)
+          );
         } catch (e) {
-          localHasDivisions = false;
+          localHasEntries = false;
         }
 
-        if (latest && (latest.activeDivisions?.length > 0 || !localHasDivisions)) {
+        // Only load latest from Supabase on root URL if local data has no entries or if explicitly needed
+        if (latest && !localHasEntries) {
           setTournament(latest);
           setIsSyncing('synced');
           setSelectedMenu('dashboard');
@@ -222,7 +284,7 @@ export default function App() {
 
   // Handler to update the entire tournament object
   const handleTournamentUpdate = (updatedTournament: Tournament) => {
-    setTournament(updatedTournament);
+    setTournament(sanitizeTournamentData(updatedTournament));
   };
 
   // Handler to update a specific active division's data
@@ -234,10 +296,10 @@ export default function App() {
       return div;
     });
 
-    setTournament({
+    setTournament(sanitizeTournamentData({
       ...tournament,
       activeDivisions: updatedDivisions
-    });
+    }));
   };
 
   // Reset to demo template data
@@ -739,6 +801,50 @@ export default function App() {
           {selectedMenu === 'div-detail' && currentDiv && (
             <div className="space-y-6" id="division-details-flow">
               
+              {/* Active Division Banner & Quick Switcher */}
+              <div className="bg-gradient-to-r from-navy via-navy-light to-navy p-4 rounded-2xl text-white flex flex-wrap items-center justify-between gap-4 card-shadow border border-navy-light" id="active-division-header-banner">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-neon/15 border border-neon/30 flex items-center justify-center shrink-0">
+                    <Award className="h-5 w-5 text-neon" />
+                  </div>
+                  <div>
+                    <div className="text-[10px] uppercase font-black tracking-wider text-neon flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full bg-neon animate-pulse" />
+                      Divisi Yang Sedang Dibuka
+                    </div>
+                    <h2 className="text-lg font-black text-white flex items-center gap-2">
+                      {currentDiv.eventName} ({currentDiv.ageGroupName})
+                    </h2>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-3 flex-wrap">
+                  <div className="text-xs text-slate-300 hidden sm:flex items-center gap-3 bg-navy-dark/60 px-3 py-1.5 rounded-xl border border-white/10">
+                    <span>👥 <strong>{currentDiv.entries.length}</strong> Pasangan</span>
+                    <span>🧩 <strong>{currentDiv.groups.length}</strong> Pool</span>
+                    <span>⚔️ <strong>{currentDiv.roundRobinMatches.length}</strong> Match</span>
+                  </div>
+
+                  {tournament.activeDivisions.length > 1 && (
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-slate-400 font-bold hidden md:inline">Ganti Divisi:</span>
+                      <select
+                        value={currentDiv.id}
+                        onChange={(e) => navigateToDivision(e.target.value)}
+                        className="bg-navy-dark text-neon font-black text-xs px-3.5 py-2 rounded-xl border border-neon/40 focus:outline-none focus:ring-2 focus:ring-neon cursor-pointer card-shadow"
+                        id="division-quick-switcher"
+                      >
+                        {tournament.activeDivisions.map(d => (
+                          <option key={d.id} value={d.id} className="bg-navy text-white font-medium">
+                            {d.eventName} ({d.ageGroupName}) — {d.entries.length} Pasangan
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                </div>
+              </div>
+
               {/* Horizontal Division Sub-tabs */}
               <div className="flex border-b border-slate-200 overflow-x-auto bg-white p-1 rounded-xl card-shadow border" id="division-subtabs">
                 <button
@@ -750,7 +856,7 @@ export default function App() {
                   }`}
                   id="tab-entries"
                 >
-                  <Users className="h-3.5 w-3.5" /> 1. Aturan & Peserta
+                  <Users className="h-3.5 w-3.5" /> 1. Peserta ({currentDiv?.entries.length || 0} Pasangan)
                 </button>
 
                 <button
@@ -762,7 +868,7 @@ export default function App() {
                   }`}
                   id="tab-groups"
                 >
-                  <Grid3X3 className="h-3.5 w-3.5" /> 2. Pembagian Grup
+                  <Grid3X3 className="h-3.5 w-3.5" /> 2. Pembagian Pool ({currentDiv?.groups.length || 0} Pool)
                 </button>
 
                 <button
@@ -774,7 +880,7 @@ export default function App() {
                   }`}
                   id="tab-round-robin"
                 >
-                  <ClipboardList className="h-3.5 w-3.5" /> 3. Round Robin (Grup)
+                  <ClipboardList className="h-3.5 w-3.5" /> 3. Jadwal Match ({currentDiv?.roundRobinMatches.length || 0})
                 </button>
 
                 <button
