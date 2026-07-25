@@ -180,8 +180,8 @@ export async function saveTournamentToSupabase(tournament: Tournament): Promise<
     if (delAGError) throw delAGError;
 
     // 2. Insert Match Types (events) - de-duplicated by database-scoped ID
+    const uniqueEventsMap = new Map<string, any>();
     if (tournament.events.length > 0) {
-      const uniqueEventsMap = new Map<string, any>();
       tournament.events.forEach(ev => {
         const dbId = getDbEventId(ev.id);
         uniqueEventsMap.set(dbId, {
@@ -192,15 +192,11 @@ export async function saveTournamentToSupabase(tournament: Tournament): Promise<
           format_type: 'RR_KO'
         });
       });
-      
-      const matchTypesData = Array.from(uniqueEventsMap.values());
-      const { error: mtError } = await supabase.from('match_types').insert(matchTypesData);
-      if (mtError) throw mtError;
     }
 
     // 3. Insert Age Groups - de-duplicated by database-scoped ID
+    const uniqueAgeGroupsMap = new Map<string, any>();
     if (tournament.ageGroups.length > 0) {
-      const uniqueAgeGroupsMap = new Map<string, any>();
       tournament.ageGroups.forEach(ag => {
         const dbId = getDbAgeGroupId(ag.id);
         uniqueAgeGroupsMap.set(dbId, {
@@ -210,20 +206,45 @@ export async function saveTournamentToSupabase(tournament: Tournament): Promise<
           is_open: ag.name.toLowerCase().includes('open') || ag.name.toLowerCase().includes('bebas')
         });
       });
+    }
 
-      const ageGroupsData = Array.from(uniqueAgeGroupsMap.values());
+    // Ensure all active divisions have corresponding match_types and age_groups
+    const validActiveDivisions = tournament.activeDivisions || [];
+    validActiveDivisions.forEach(div => {
+      const dbEvId = getDbEventId(div.eventId);
+      if (!uniqueEventsMap.has(dbEvId)) {
+        uniqueEventsMap.set(dbEvId, {
+          id: dbEvId,
+          tournament_id: tournament.id,
+          name: div.eventName || 'Event',
+          is_double: true,
+          format_type: 'RR_KO'
+        });
+      }
+      const dbAgId = getDbAgeGroupId(div.ageGroupId);
+      if (!uniqueAgeGroupsMap.has(dbAgId)) {
+        uniqueAgeGroupsMap.set(dbAgId, {
+          id: dbAgId,
+          tournament_id: tournament.id,
+          name: div.ageGroupName || 'Kategori',
+          is_open: true
+        });
+      }
+    });
+
+    const matchTypesData = Array.from(uniqueEventsMap.values());
+    if (matchTypesData.length > 0) {
+      const { error: mtError } = await supabase.from('match_types').insert(matchTypesData);
+      if (mtError) throw mtError;
+    }
+
+    const ageGroupsData = Array.from(uniqueAgeGroupsMap.values());
+    if (ageGroupsData.length > 0) {
       const { error: agError } = await supabase.from('age_groups').insert(ageGroupsData);
       if (agError) throw agError;
     }
 
     // 4. Insert Divisions - de-duplicated by database-scoped ID
-    // CRITICAL: We only save active divisions that point to currently valid event IDs and age group IDs
-    const validEventIds = new Set(tournament.events.map(ev => ev.id));
-    const validAgeGroupIds = new Set(tournament.ageGroups.map(ag => ag.id));
-    const validActiveDivisions = (tournament.activeDivisions || []).filter(div => 
-      validEventIds.has(div.eventId) && validAgeGroupIds.has(div.ageGroupId)
-    );
-
     if (validActiveDivisions.length > 0) {
       const uniqueDivisionsMap = new Map<string, any>();
       validActiveDivisions.forEach(div => {

@@ -146,14 +146,23 @@ export default function App() {
       };
       loadFromUrl();
     } else if (isSupabaseConfigured) {
-      // Direct access (e.g. root URL): load the most recently created tournament from Supabase
+      // Direct access (e.g. root URL): load the most recently created tournament from Supabase if latest has active divisions or if local data is empty
       const loadLatest = async () => {
         setIsSyncing('syncing');
         const latest = await getLatestTournamentFromSupabase();
-        if (latest) {
+        
+        let localHasDivisions = false;
+        try {
+          const localSaved = localStorage.getItem(LOCAL_STORAGE_KEY);
+          const localData = localSaved ? JSON.parse(localSaved) : null;
+          localHasDivisions = Boolean(localData?.activeDivisions && localData.activeDivisions.length > 0);
+        } catch (e) {
+          localHasDivisions = false;
+        }
+
+        if (latest && (latest.activeDivisions?.length > 0 || !localHasDivisions)) {
           setTournament(latest);
           setIsSyncing('synced');
-          setSelectedMenu('dashboard');
           if (latest.activeDivisions && latest.activeDivisions.length > 0) {
             setSelectedDivisionId(latest.activeDivisions[0].id);
           } else {
