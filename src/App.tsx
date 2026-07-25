@@ -132,12 +132,10 @@ export default function App() {
         if (loaded) {
           setTournament(loaded);
           setIsSyncing('synced');
+          setSelectedMenu('dashboard');
           if (loaded.activeDivisions && loaded.activeDivisions.length > 0) {
             setSelectedDivisionId(loaded.activeDivisions[0].id);
-            setSelectedMenu('div-detail');
-            setDivisionTab('groups');
           } else {
-            setSelectedMenu('dashboard');
             setSelectedDivisionId('');
           }
           showToast('Turnamen berhasil dimuat dari tautan cloud!', 'success');
@@ -155,12 +153,10 @@ export default function App() {
         if (latest) {
           setTournament(latest);
           setIsSyncing('synced');
+          setSelectedMenu('dashboard');
           if (latest.activeDivisions && latest.activeDivisions.length > 0) {
             setSelectedDivisionId(latest.activeDivisions[0].id);
-            setSelectedMenu('div-detail');
-            setDivisionTab('groups');
           } else {
-            setSelectedMenu('dashboard');
             setSelectedDivisionId('');
           }
         } else {
@@ -285,12 +281,10 @@ export default function App() {
     if (loaded) {
       setTournament(loaded);
       setIsSyncing('synced');
+      setSelectedMenu('dashboard');
       if (loaded.activeDivisions && loaded.activeDivisions.length > 0) {
         setSelectedDivisionId(loaded.activeDivisions[0].id);
-        setSelectedMenu('div-detail');
-        setDivisionTab('groups');
       } else {
-        setSelectedMenu('dashboard');
         setSelectedDivisionId('');
       }
       showToast('Berhasil memuat turnamen dari cloud!', 'success');
@@ -391,7 +385,12 @@ export default function App() {
   const navigateToDivision = (divisionId: string) => {
     setSelectedDivisionId(divisionId);
     setSelectedMenu('div-detail');
-    setDivisionTab('groups');
+    const targetDiv = tournament.activeDivisions.find(d => d.id === divisionId);
+    if (targetDiv && targetDiv.groups && targetDiv.groups.length > 0) {
+      setDivisionTab('round-robin');
+    } else {
+      setDivisionTab('groups');
+    }
   };
 
   const currentDiv = tournament.activeDivisions.find(div => div.id === selectedDivisionId);
@@ -600,38 +599,36 @@ export default function App() {
           </div>
 
           {/* Section: Daftar Divisi Aktif */}
-          {isAdmin && (
-            <div className="space-y-1.5 pt-2">
-              <span className="px-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider block mb-2">Divisi Pertandingan Aktif</span>
-              
-              {tournament.activeDivisions.length === 0 ? (
-                <p className="px-3 text-xs text-slate-500 italic leading-relaxed">
-                  Belum ada divisi aktif. Aktifkan kombinasi di tab Atur Turnamen.
-                </p>
-              ) : (
-                <div className="space-y-1" id="sidebar-active-divisions-list">
-                  {tournament.activeDivisions.map(div => {
-                    const isActive = selectedMenu === 'div-detail' && selectedDivisionId === div.id;
-                    return (
-                      <button
-                        key={div.id}
-                        onClick={() => navigateToDivision(div.id)}
-                        className={`w-full px-3 py-2 rounded-lg text-xs font-medium text-left transition flex items-center gap-2 truncate ${
-                          isActive
-                            ? 'bg-navy-light text-neon font-bold border-l-2 border-l-neon'
-                            : 'text-slate-450 hover:text-slate-200 hover:bg-navy-light/40'
-                        }`}
-                        id={`nav-division-${div.id}`}
-                      >
-                        <Award className={`h-3.5 w-3.5 shrink-0 ${isActive ? 'text-neon' : 'text-slate-500'}`} />
-                        <span className="truncate">{div.eventName} {div.ageGroupName}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          )}
+          <div className="space-y-1.5 pt-2">
+            <span className="px-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider block mb-2">Divisi Pertandingan Aktif</span>
+            
+            {tournament.activeDivisions.length === 0 ? (
+              <p className="px-3 text-xs text-slate-500 italic leading-relaxed">
+                Belum ada divisi aktif.
+              </p>
+            ) : (
+              <div className="space-y-1" id="sidebar-active-divisions-list">
+                {tournament.activeDivisions.map(div => {
+                  const isActive = selectedMenu === 'div-detail' && selectedDivisionId === div.id;
+                  return (
+                    <button
+                      key={div.id}
+                      onClick={() => navigateToDivision(div.id)}
+                      className={`w-full px-3 py-2 rounded-lg text-xs font-medium text-left transition flex items-center gap-2 truncate ${
+                        isActive
+                          ? 'bg-navy-light text-neon font-bold border-l-2 border-l-neon'
+                          : 'text-slate-450 hover:text-slate-200 hover:bg-navy-light/40'
+                      }`}
+                      id={`nav-division-${div.id}`}
+                    >
+                      <Award className={`h-3.5 w-3.5 shrink-0 ${isActive ? 'text-neon' : 'text-slate-500'}`} />
+                      <span className="truncate">{div.eventName} {div.ageGroupName}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
 
         </div>
 

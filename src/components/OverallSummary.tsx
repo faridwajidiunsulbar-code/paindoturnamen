@@ -7,6 +7,7 @@ import React from 'react';
 import { Tournament, Division } from '../types';
 import { Trophy, Award, Medal, Users, Calendar, MapPin, CheckCircle, Clock, Download, Info, Calculator, Zap, ShieldAlert } from 'lucide-react';
 import { exportTournamentToPDF } from '../utils/pdfExport';
+import GroupStandingsCards from './GroupStandingsCards';
 
 interface OverallSummaryProps {
   tournament: Tournament;
@@ -21,6 +22,9 @@ export default function OverallSummary({ tournament, onNavigateToDivision, isAdm
   const totalDivisions = activeDivisions.length;
   const finishedDivisions = activeDivisions.filter(d => d.champions !== null).length;
   const totalEntries = activeDivisions.reduce((acc, d) => acc + d.entries.length, 0);
+
+  // Divisions that have configured groups
+  const configuredDivisions = activeDivisions.filter(d => d.groups && d.groups.length > 0);
 
   const getEntryLabel = (division: Division, id: string | null) => {
     if (!id) return '-';
@@ -89,7 +93,40 @@ export default function OverallSummary({ tournament, onNavigateToDivision, isAdm
         </div>
       </div>
 
-      {/* 2. CHAMPIONS SUMMARIES BOARD */}
+      {/* 2. KLASEMEN GRUP OTOMATIS UNTUK SEMUA DIVISI AKTIF (JIKA TELAH DIATUR) */}
+      {configuredDivisions.length > 0 && (
+        <section className="space-y-6" id="all-configured-standings-section">
+          <div className="bg-white p-5 rounded-2xl border border-slate-200 card-shadow flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 bg-navy rounded-xl text-neon shrink-0 shadow-xs">
+                <Trophy className="h-6 w-6 font-black" />
+              </div>
+              <div>
+                <h3 className="text-base font-extrabold text-navy tracking-tight">Klasemen Grup Otomatis</h3>
+                <p className="text-xs text-slate-500 font-medium">
+                  Tampilan klasemen penyisihan grup otomatis untuk seluruh kategori divisi pertandingan yang aktif.
+                </p>
+              </div>
+            </div>
+            <span className="self-start md:self-auto px-3 py-1 bg-lime-100 text-lime-900 border border-lime-300/80 text-xs font-extrabold rounded-full shrink-0">
+              {configuredDivisions.length} Divisi Aktif Terkonfigurasi
+            </span>
+          </div>
+
+          <div className="space-y-8">
+            {configuredDivisions.map(div => (
+              <GroupStandingsCards
+                key={div.id}
+                division={div}
+                onNavigateToDivision={onNavigateToDivision}
+                showDivisionTitle={true}
+              />
+            ))}
+          </div>
+        </section>
+      )}
+
+      {/* 3. CHAMPIONS SUMMARIES BOARD */}
       <section className="space-y-4" id="champions-recap-section">
         <h3 className="text-base font-extrabold text-navy flex items-center gap-2">
           <Trophy className="h-5 w-5 text-neon stroke-navy fill-neon" />

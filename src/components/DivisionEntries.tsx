@@ -36,6 +36,12 @@ export default function DivisionEntries({ division, isDouble, onUpdateDivision, 
     message: string;
   } | null>(null);
 
+  const [showConfirm, setShowConfirm] = useState<{
+    title: string;
+    message: string;
+    onConfirm: () => void;
+  } | null>(null);
+
   // Dynamic pool of players loaded from localStorage or falling back to defaults
   const [poolPlayers, setPoolPlayers] = useState<string[]>(() => {
     const saved = localStorage.getItem('paindo_pool_players');
@@ -261,20 +267,43 @@ export default function DivisionEntries({ division, isDouble, onUpdateDivision, 
 
   // Remove entry
   const removeEntry = (id: string) => {
-    // Check if entry is in a group or match before deleting
     const isInGroup = division.groups.some(g => g.entryIds.includes(id));
-    if (isInGroup) {
-      setShowAlert({
-        title: 'Peserta Sudah Masuk Grup',
-        message: 'Peserta tidak bisa dihapus karena sudah dimasukkan ke dalam Grup. Silakan keluarkan peserta dari grup terlebih dahulu.'
-      });
-      return;
-    }
+    const isInMatches = division.roundRobinMatches.some(m => m.entryId1 === id || m.entryId2 === id);
 
-    onUpdateDivision({
-      ...division,
-      entries: division.entries.filter(ent => ent.id !== id)
-    });
+    const executeDelete = () => {
+      // 1. Remove from entries
+      const updatedEntries = division.entries.filter(ent => ent.id !== id);
+
+      // 2. Remove from groups
+      const updatedGroups = division.groups.map(g => ({
+        ...g,
+        entryIds: g.entryIds.filter(eId => eId !== id)
+      }));
+
+      // 3. Remove from round robin matches if match references this entry
+      const updatedMatches = division.roundRobinMatches.filter(
+        m => m.entryId1 !== id && m.entryId2 !== id
+      );
+
+      onUpdateDivision({
+        ...division,
+        entries: updatedEntries,
+        groups: updatedGroups,
+        roundRobinMatches: updatedMatches
+      });
+
+      setShowConfirm(null);
+    };
+
+    if (isInGroup || isInMatches) {
+      setShowConfirm({
+        title: 'Hapus Peserta dari Turnamen?',
+        message: 'Peserta ini saat ini terdaftar di dalam grup atau jadwal pertandingan. Menghapus peserta ini akan otomatis mengeluarkannya dari grup dan memperbarui jadwal pertandingan terkait. Apakah Anda yakin ingin melanjutkan?',
+        onConfirm: executeDelete
+      });
+    } else {
+      executeDelete();
+    }
   };
 
   return (
@@ -880,6 +909,38 @@ export default function DivisionEntries({ division, isDouble, onUpdateDivision, 
                 id="alert-close-button"
               >
                 Mengerti
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showConfirm && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fade-in" id="custom-confirm-modal">
+          <div className="bg-white rounded-2xl max-w-md w-full border border-slate-150 p-6 shadow-2xl transform transition-all animate-scale-up" id="custom-confirm-card">
+            <h3 className="text-lg font-extrabold text-slate-900 mb-2 flex items-center gap-2">
+              <span className="inline-flex items-center justify-center h-8 w-8 rounded-full bg-rose-50 border border-rose-200 text-rose-600 font-bold text-lg shrink-0">⚠️</span>
+              {showConfirm.title}
+            </h3>
+            <p className="text-sm text-slate-600 mb-6 leading-relaxed">
+              {showConfirm.message}
+            </p>
+            <div className="flex gap-3 justify-end">
+              <button
+                type="button"
+                onClick={() => setShowConfirm(null)}
+                className="px-4 py-2 text-sm font-semibold text-slate-500 hover:text-slate-800 hover:bg-slate-50 border border-slate-200 rounded-lg transition"
+                id="confirm-cancel-button"
+              >
+                Batalkan
+              </button>
+              <button
+                type="button"
+                onClick={showConfirm.onConfirm}
+                className="px-4 py-2 text-sm font-extrabold text-rose-600 hover:text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-lg transition"
+                id="confirm-submit-button"
+              >
+                Ya, Hapus Peserta
               </button>
             </div>
           </div>

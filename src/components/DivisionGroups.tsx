@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Division, Group, Entry, Match } from '../types';
 import { generateRoundRobinMatches } from '../utils/tournamentHelpers';
 import { Plus, Trash2, ArrowRight, X, Play, RefreshCw, AlertCircle, HelpCircle } from 'lucide-react';
@@ -34,6 +34,21 @@ export default function DivisionGroups({ division, onUpdateDivision, isAdmin = t
     ];
   });
 
+  // Sync localGroups whenever groups from props change
+  useEffect(() => {
+    if (groups && groups.length > 0) {
+      setLocalGroups(groups);
+    }
+  }, [groups]);
+
+  const updateGroupsAndSync = (updated: Group[]) => {
+    setLocalGroups(updated);
+    onUpdateDivision({
+      ...division,
+      groups: updated
+    });
+  };
+
   // Custom modal states to bypass standard browser alert/confirm iframe limits
   const [showConfirm, setShowConfirm] = useState<{
     title: string;
@@ -58,7 +73,7 @@ export default function DivisionGroups({ division, onUpdateDivision, isAdmin = t
       name: `Grup ${nextCode}`,
       entryIds: []
     };
-    setLocalGroups([...localGroups, newGroup]);
+    updateGroupsAndSync([...localGroups, newGroup]);
   };
 
   // Delete a group and release its entries back to unassigned
@@ -76,7 +91,7 @@ export default function DivisionGroups({ division, onUpdateDivision, isAdmin = t
       ...g,
       name: `Grup ${String.fromCharCode(65 + index)}`
     }));
-    setLocalGroups(renamed);
+    updateGroupsAndSync(renamed);
   };
 
   // Move entry to specific group
@@ -96,7 +111,7 @@ export default function DivisionGroups({ division, onUpdateDivision, isAdmin = t
       }
       return { ...g, entryIds: ids };
     });
-    setLocalGroups(updated);
+    updateGroupsAndSync(updated);
   };
 
   // Remove entry from group (make unassigned)
@@ -107,7 +122,7 @@ export default function DivisionGroups({ division, onUpdateDivision, isAdmin = t
       }
       return g;
     });
-    setLocalGroups(updated);
+    updateGroupsAndSync(updated);
   };
 
   // Distribute unassigned entries randomly to groups (auto-assign/smart helper)
@@ -127,7 +142,27 @@ export default function DivisionGroups({ division, onUpdateDivision, isAdmin = t
       targetGroup.entryIds.push(entry.id);
     });
 
-    setLocalGroups(updated);
+    updateGroupsAndSync(updated);
+  };
+
+  // Reset / clear all group assignments
+  const resetAllGroups = () => {
+    setShowConfirm({
+      title: 'Kosongkan Semua Grup?',
+      message: 'Apakah Anda yakin ingin mengeluarkan seluruh peserta dari semua grup dan menghapus jadwal pertandingan terkait?',
+      onConfirm: () => {
+        const resetGroups = localGroups.map(g => ({ ...g, entryIds: [] }));
+        setLocalGroups(resetGroups);
+        onUpdateDivision({
+          ...division,
+          groups: resetGroups,
+          roundRobinMatches: [],
+          knockoutStage: null,
+          champions: null
+        });
+        setShowConfirm(null);
+      }
+    });
   };
 
   // Lock groups and generate round robin matches
@@ -216,15 +251,29 @@ export default function DivisionGroups({ division, onUpdateDivision, isAdmin = t
           </p>
         </div>
         
-        {isAdmin && unassignedEntries.length > 0 && (
-          <button
-            type="button"
-            onClick={autoDistribute}
-            className="px-4 py-2 bg-neon/15 hover:bg-neon/30 text-navy text-xs font-extrabold rounded-lg border border-neon/30 transition flex items-center gap-1 md:self-center card-shadow"
-            id="auto-distribute-button"
-          >
-            <RefreshCw className="h-3.5 w-3.5" /> Bagi Grup Otomatis (Acak)
-          </button>
+        {isAdmin && (
+          <div className="flex gap-2 flex-wrap md:self-center">
+            {unassignedEntries.length > 0 && (
+              <button
+                type="button"
+                onClick={autoDistribute}
+                className="px-4 py-2 bg-neon/15 hover:bg-neon/30 text-navy text-xs font-extrabold rounded-lg border border-neon/30 transition flex items-center gap-1 card-shadow"
+                id="auto-distribute-button"
+              >
+                <RefreshCw className="h-3.5 w-3.5" /> Bagi Grup Otomatis (Acak)
+              </button>
+            )}
+            {assignedEntryIds.size > 0 && (
+              <button
+                type="button"
+                onClick={resetAllGroups}
+                className="px-3.5 py-2 bg-rose-50 hover:bg-rose-100 text-rose-600 text-xs font-extrabold rounded-lg border border-rose-200 transition flex items-center gap-1 card-shadow"
+                id="reset-all-groups-button"
+              >
+                <Trash2 className="h-3.5 w-3.5 text-rose-500" /> Kosongkan Semua Grup
+              </button>
+            )}
+          </div>
         )}
       </div>
 
