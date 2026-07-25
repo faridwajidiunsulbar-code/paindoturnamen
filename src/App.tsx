@@ -94,9 +94,7 @@ export default function App() {
     : '';
 
   // Navigation Menu: 'dashboard' | 'config' | 'div-detail'
-  const [selectedMenu, setSelectedMenu] = useState<'dashboard' | 'config' | 'div-detail'>(
-    initialDivId ? 'div-detail' : 'dashboard'
-  );
+  const [selectedMenu, setSelectedMenu] = useState<'dashboard' | 'config' | 'div-detail'>('dashboard');
   
   // Selected Division ID for 'div-detail' view
   const [selectedDivisionId, setSelectedDivisionId] = useState<string>(initialDivId);
@@ -163,6 +161,7 @@ export default function App() {
         if (latest && (latest.activeDivisions?.length > 0 || !localHasDivisions)) {
           setTournament(latest);
           setIsSyncing('synced');
+          setSelectedMenu('dashboard');
           if (latest.activeDivisions && latest.activeDivisions.length > 0) {
             setSelectedDivisionId(latest.activeDivisions[0].id);
           } else {
