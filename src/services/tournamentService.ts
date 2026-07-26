@@ -234,13 +234,13 @@ export async function saveTournamentToSupabase(tournament: Tournament): Promise<
 
     const matchTypesData = Array.from(uniqueEventsMap.values());
     if (matchTypesData.length > 0) {
-      const { error: mtError } = await supabase.from('match_types').insert(matchTypesData);
+      const { error: mtError } = await supabase.from('match_types').upsert(matchTypesData, { onConflict: 'id' });
       if (mtError) throw mtError;
     }
 
     const ageGroupsData = Array.from(uniqueAgeGroupsMap.values());
     if (ageGroupsData.length > 0) {
-      const { error: agError } = await supabase.from('age_groups').insert(ageGroupsData);
+      const { error: agError } = await supabase.from('age_groups').upsert(ageGroupsData, { onConflict: 'id' });
       if (agError) throw agError;
     }
 
@@ -268,7 +268,7 @@ export async function saveTournamentToSupabase(tournament: Tournament): Promise<
       });
 
       const divisionsData = Array.from(uniqueDivisionsMap.values());
-      const { error: divError } = await supabase.from('divisions').insert(divisionsData);
+      const { error: divError } = await supabase.from('divisions').upsert(divisionsData, { onConflict: 'id' });
       if (divError) throw divError;
 
       // 5. Insert Entries (for all divisions) - de-duplicated by ID
@@ -293,7 +293,7 @@ export async function saveTournamentToSupabase(tournament: Tournament): Promise<
 
       const allEntries = Array.from(uniqueEntriesMap.values());
       if (allEntries.length > 0) {
-        const { error: entError } = await supabase.from('entries').insert(allEntries);
+        const { error: entError } = await supabase.from('entries').upsert(allEntries, { onConflict: 'id' });
         if (entError) throw entError;
       }
 
@@ -317,7 +317,7 @@ export async function saveTournamentToSupabase(tournament: Tournament): Promise<
 
       const allGroups = Array.from(uniqueGroupsMap.values());
       if (allGroups.length > 0) {
-        const { error: gError } = await supabase.from('division_groups').insert(allGroups);
+        const { error: gError } = await supabase.from('division_groups').upsert(allGroups, { onConflict: 'id' });
         if (gError) throw gError;
 
         // 7. Insert Group Members (de-duplicated & verified against insertedEntryIds)
@@ -341,7 +341,7 @@ export async function saveTournamentToSupabase(tournament: Tournament): Promise<
 
         const allGroupMembers = Array.from(groupMembersMap.values());
         if (allGroupMembers.length > 0) {
-          const { error: gmError } = await supabase.from('group_members').insert(allGroupMembers);
+          const { error: gmError } = await supabase.from('group_members').upsert(allGroupMembers, { onConflict: 'group_id,entry_id' });
           if (gmError) throw gmError;
         }
       }
@@ -401,7 +401,7 @@ export async function saveTournamentToSupabase(tournament: Tournament): Promise<
 
       const allMatches = Array.from(uniqueMatchesMap.values());
       if (allMatches.length > 0) {
-        const { error: matchError } = await supabase.from('matches').insert(allMatches);
+        const { error: matchError } = await supabase.from('matches').upsert(allMatches, { onConflict: 'id' });
         if (matchError) throw matchError;
       }
 
@@ -425,7 +425,7 @@ export async function saveTournamentToSupabase(tournament: Tournament): Promise<
       });
 
       if (allKnockoutSlots.length > 0) {
-        const { error: slotError } = await supabase.from('knockout_slots').insert(allKnockoutSlots);
+        const { error: slotError } = await supabase.from('knockout_slots').upsert(allKnockoutSlots);
         if (slotError) throw slotError;
       }
 
@@ -446,7 +446,7 @@ export async function saveTournamentToSupabase(tournament: Tournament): Promise<
       });
 
       if (allChampions.length > 0) {
-        const { error: champError } = await supabase.from('champions').insert(allChampions);
+        const { error: champError } = await supabase.from('champions').upsert(allChampions, { onConflict: 'id' });
         if (champError) throw champError;
       }
     }
