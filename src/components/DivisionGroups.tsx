@@ -6,7 +6,6 @@
 import React, { useState, useEffect } from 'react';
 import { Division, Group, Entry, Match } from '../types';
 import { generateRoundRobinMatches } from '../utils/tournamentHelpers';
-import { createGandaPutraDivisionFromImage } from '../data/imageDataPreset';
 import { Plus, Trash2, ArrowRight, X, Play, RefreshCw, AlertCircle, HelpCircle, Sparkles } from 'lucide-react';
 
 interface DivisionGroupsProps {
@@ -166,14 +165,39 @@ export default function DivisionGroups({ division, onUpdateDivision, isAdmin = t
     });
   };
 
-  // Import 17 pairs and Pool A-D from the image note
-  const handleImportImageData = () => {
-    const rand = Math.random().toString(36).substring(2, 7);
-    const newDiv = createGandaPutraDivisionFromImage(rand, division.eventId, division.ageGroupId);
-    onUpdateDivision(newDiv);
+  // Generate groups automatically from available entries
+  const handleGenerateGroups = () => {
+    if (entries.length === 0) {
+      setShowAlert({
+        title: 'Tidak Ada Peserta',
+        message: 'Belum ada peserta terdaftar. Silakan tambahkan atau impor peserta terlebih dahulu.'
+      });
+      return;
+    }
+
+    const targetPerGroup = settings.playersPerGroup || 4;
+    const numGroups = Math.max(1, Math.ceil(entries.length / targetPerGroup));
+    
+    const newGroups: Group[] = Array.from({ length: numGroups }, (_, i) => {
+      const code = String.fromCharCode(65 + i);
+      return {
+        id: `grp-${code.toLowerCase()}-${Date.now()}-${i}`,
+        name: `Grup ${code}`,
+        entryIds: []
+      };
+    });
+
+    // Shuffle entries and distribute evenly across groups
+    const shuffled = [...entries].sort(() => Math.random() - 0.5);
+    shuffled.forEach((entry, idx) => {
+      const targetIdx = idx % numGroups;
+      newGroups[targetIdx].entryIds.push(entry.id);
+    });
+
+    updateGroupsAndSync(newGroups);
     setShowAlert({
-      title: 'Data Berhasil Dimuat! 🎯',
-      message: '17 Pasangan ganda dan 4 Pool (Pool A, Pool B, Pool C, Pool D) dari catatan gambar telah berhasil dimasukkan lengkap dengan jadwal pertandingannya.'
+      title: 'Grup Berhasil Di-generate! 🎯',
+      message: `Berhasil membagi ${entries.length} peserta ke dalam ${numGroups} grup secara otomatis.`
     });
   };
 
@@ -267,12 +291,12 @@ export default function DivisionGroups({ division, onUpdateDivision, isAdmin = t
           <div className="flex gap-2 flex-wrap md:self-center">
             <button
               type="button"
-              onClick={handleImportImageData}
-              className="px-3.5 py-2 bg-navy hover:bg-navy-light text-neon border border-neon/30 rounded-lg text-xs font-black transition flex items-center gap-1.5 card-shadow"
-              id="import-image-data-button"
-              title="Muat 17 Pasangan & Pembagian Pool A-D dari Catatan Gambar"
+              onClick={handleGenerateGroups}
+              className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-extrabold transition flex items-center gap-1.5 card-shadow"
+              id="btn-generate-groups"
+              title="Bagi seluruh peserta terdaftar ke dalam grup secara otomatis"
             >
-              <Sparkles className="h-3.5 w-3.5 text-neon" /> 📷 Impor Data Gambar (Pool A-D)
+              <Sparkles className="h-3.5 w-3.5 text-neon" /> 🎯 Generate Grup Otomatis
             </button>
             {unassignedEntries.length > 0 && (
               <button

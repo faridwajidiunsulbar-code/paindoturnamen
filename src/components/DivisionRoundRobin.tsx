@@ -4,9 +4,8 @@
  */
 
 import React, { useState } from 'react';
-import { Division, Match, Entry, GroupStandingRow } from '../types';
+import { Division, Match, Entry, Group, GroupStandingRow } from '../types';
 import { calculateGroupStandings, generateRoundRobinMatches } from '../utils/tournamentHelpers';
-import { createGandaPutraDivisionFromImage } from '../data/imageDataPreset';
 import { Award, Check, Eye, Edit3, Circle, ClipboardCheck, Trophy, RefreshCw, X, AlertCircle, Play, Sparkles } from 'lucide-react';
 
 interface DivisionRoundRobinProps {
@@ -55,11 +54,47 @@ export default function DivisionRoundRobin({ division, onUpdateDivision, isAdmin
     });
   };
 
-  // Import 17 pairs preset if division is empty
-  const handleImportImageData = () => {
-    const rand = Math.random().toString(36).substring(2, 7);
-    const newDiv = createGandaPutraDivisionFromImage(rand, division.eventId, division.ageGroupId);
-    onUpdateDivision(newDiv);
+  // Generate groups automatically & create round-robin matches
+  const handleGenerateGroupsAndMatches = () => {
+    if (entries.length === 0) {
+      setShowAlert({
+        title: 'Tidak Ada Peserta',
+        message: 'Belum ada peserta terdaftar. Silakan tambahkan atau impor peserta di tab Peserta terlebih dahulu.'
+      });
+      return;
+    }
+
+    const targetPerGroup = settings.playersPerGroup || 4;
+    const numGroups = Math.max(1, Math.ceil(entries.length / targetPerGroup));
+    
+    const newGroups: Group[] = Array.from({ length: numGroups }, (_, i) => {
+      const code = String.fromCharCode(65 + i);
+      return {
+        id: `grp-${code.toLowerCase()}-${Date.now()}-${i}`,
+        name: `Grup ${code}`,
+        entryIds: []
+      };
+    });
+
+    const shuffled = [...entries].sort(() => Math.random() - 0.5);
+    shuffled.forEach((entry, idx) => {
+      const targetIdx = idx % numGroups;
+      newGroups[targetIdx].entryIds.push(entry.id);
+    });
+
+    let allMatches: Match[] = [];
+    newGroups.forEach(g => {
+      const groupMatches = generateRoundRobinMatches(division.id, g, entries);
+      allMatches = [...allMatches, ...groupMatches];
+    });
+
+    onUpdateDivision({
+      ...division,
+      groups: newGroups,
+      roundRobinMatches: allMatches,
+      knockoutStage: null,
+      champions: null
+    });
   };
 
   // Calculate standings for each group
@@ -270,11 +305,12 @@ export default function DivisionRoundRobin({ division, onUpdateDivision, isAdmin
             {isAdmin && (
               <button
                 type="button"
-                onClick={handleImportImageData}
-                className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-black text-xs flex items-center gap-2 transition card-shadow shadow-xs hover:-translate-y-0.5"
-                title="Impor 17 Pasangan ganda & Pool A-D dari catatan gambar"
+                onClick={handleGenerateGroupsAndMatches}
+                className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-extrabold text-xs flex items-center gap-2 transition card-shadow shadow-xs hover:-translate-y-0.5"
+                title="Bagi seluruh peserta terdaftar ke dalam grup & buat jadwal pertandingan secara otomatis"
+                id="btn-generate-groups-rr"
               >
-                <Sparkles className="h-4 w-4 text-emerald-200" /> Impor Data Gambar (17 Pasang / Pool A-D)
+                <Sparkles className="h-4 w-4 text-neon" /> 🎯 Generate Grup Otomatis
               </button>
             )}
           </div>

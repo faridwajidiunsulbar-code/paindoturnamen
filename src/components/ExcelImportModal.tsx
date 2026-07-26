@@ -25,6 +25,11 @@ export default function ExcelImportModal({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [fileName, setFileName] = useState<string | null>(null);
 
+  // Workbook & Sheet selection state
+  const [workbook, setWorkbook] = useState<XLSX.WorkBook | null>(null);
+  const [sheetNames, setSheetNames] = useState<string[]>([]);
+  const [selectedSheet, setSelectedSheet] = useState<string>('');
+
   if (!isOpen) return null;
 
   // Helper to process row arrays / objects into Entry list
@@ -122,19 +127,40 @@ export default function ExcelImportModal({
     reader.onload = (evt) => {
       try {
         const bstr = evt.target?.result;
-        const workbook = XLSX.read(bstr, { type: 'binary' });
-        const firstSheetName = workbook.SheetNames[0];
-        const worksheet = workbook.Sheets[firstSheetName];
-        
-        // Convert sheet to array of arrays
-        const jsonRows = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
-        processRawRows(jsonRows);
+        const wb = XLSX.read(bstr, { type: 'binary' });
+        setWorkbook(wb);
+        setSheetNames(wb.SheetNames || []);
+
+        const firstSheetName = wb.SheetNames[0] || '';
+        setSelectedSheet(firstSheetName);
+
+        if (firstSheetName && wb.Sheets[firstSheetName]) {
+          const worksheet = wb.Sheets[firstSheetName];
+          const jsonRows = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+          processRawRows(jsonRows);
+        } else {
+          setErrorMessage('Workbook tidak memiliki sheet yang valid.');
+          setParsedEntries([]);
+        }
       } catch (err: any) {
         setErrorMessage('Gagal membaca file Excel/CSV: ' + (err.message || 'Format tidak didukung'));
         setParsedEntries([]);
+        setWorkbook(null);
+        setSheetNames([]);
+        setSelectedSheet('');
       }
     };
     reader.readAsBinaryString(file);
+  };
+
+  // Handle Sheet Change
+  const handleSheetChange = (sheetName: string) => {
+    setSelectedSheet(sheetName);
+    if (workbook && workbook.Sheets[sheetName]) {
+      const worksheet = workbook.Sheets[sheetName];
+      const jsonRows = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+      processRawRows(jsonRows);
+    }
   };
 
   // Handle Text Paste (TSV / CSV / Tab Delimited)
@@ -254,6 +280,27 @@ export default function ExcelImportModal({
                   Mendukung format Microsoft Excel (.xlsx, .xls) dan CSV
                 </p>
               </div>
+
+              {sheetNames.length > 0 && (
+                <div className="flex items-center gap-2 text-xs bg-emerald-50/80 border border-emerald-200 p-3 rounded-xl animate-fade-in">
+                  <FileSpreadsheet className="h-4 w-4 text-emerald-700 shrink-0" />
+                  <label htmlFor="sheet-select" className="font-bold text-slate-700 whitespace-nowrap">
+                    Pilih Sheet ({sheetNames.length} sheet):
+                  </label>
+                  <select
+                    id="sheet-select"
+                    value={selectedSheet}
+                    onChange={(e) => handleSheetChange(e.target.value)}
+                    className="flex-1 bg-white border border-emerald-300 rounded-lg px-2.5 py-1.5 font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 text-xs shadow-xs cursor-pointer"
+                  >
+                    {sheetNames.map((s) => (
+                      <option key={s} value={s}>
+                        📄 {s}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
 
               <div className="flex items-center justify-between text-xs text-slate-500 bg-slate-100 p-3 rounded-xl border border-slate-200">
                 <span>Format kolom yang disarankan: <strong>{isDouble ? 'Pemain 1, Pemain 2, Klub/Afiliasi' : 'Nama Pemain, Klub/Afiliasi'}</strong></span>
