@@ -23,23 +23,18 @@ export const DEFAULT_AGE_GROUPS: AgeGroup[] = [
 
 export function getInitialTournament(): Tournament {
   const rand = Math.random().toString(36).substring(2, 7);
-  const tId = `t-championship-${rand}`;
+  const tId = `t-${Date.now()}`;
   
   const events = DEFAULT_EVENTS.map(ev => ({ ...ev, id: `${ev.id}-${rand}` }));
   const ageGroups = DEFAULT_AGE_GROUPS.map(ag => ({ ...ag, id: `${ag.id}-${rand}` }));
 
-  const eventGp = events.find(e => e.name === 'Ganda Putra') || events[0];
-  const ageGroupOpen = ageGroups.find(a => a.name === 'Open/Bebas') || ageGroups[0];
-
-  const sampleDivision: Division = createGandaPutraDivisionFromImage(rand, eventGp.id, ageGroupOpen.id);
-
   return {
     id: tId,
-    name: 'Turnamen UGM x Paindo Pickle',
-    date: '2026-07-30',
-    location: 'Kantor Desa Lapeo',
+    name: 'Turnamen Paindo Pickleball',
+    date: new Date().toISOString().split('T')[0],
+    location: '',
     events,
     ageGroups,
-    activeDivisions: [sampleDivision]
+    activeDivisions: []
   };
 }

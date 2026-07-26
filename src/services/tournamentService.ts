@@ -70,7 +70,7 @@ export async function saveTournamentToSupabase(tournament: Tournament): Promise<
   
   const user = await getCurrentUser();
   if (!user) {
-    console.warn('User not authenticated. Cannot save to Supabase.');
+    (window as any).lastSupabaseError = 'Silakan login terlebih dahulu untuk menyinkronkan data ke Supabase Cloud.';
     return false;
   }
 
@@ -100,40 +100,48 @@ export async function saveTournamentToSupabase(tournament: Tournament): Promise<
   };
 
   try {
-    // 0. Ensure user has a profile in public.profiles table to prevent foreign key violations on tournament owner_id
-    const { data: profileCheck, error: checkErr } = await supabase
-      .from('profiles')
-      .select('id')
-      .eq('id', user.id)
-      .maybeSingle();
-
-    if (!profileCheck) {
-      const { error: insErr } = await supabase
+    // 0. Ensure user has a profile if logged in
+    if (user) {
+      const { data: profileCheck } = await supabase
         .from('profiles')
-        .upsert({
-          id: user.id,
-          full_name: user.user_metadata?.full_name || user.email || 'Admin',
-          role: 'admin'
-        });
-      if (insErr) {
-        console.warn('Could not auto-create user profile in database:', insErr);
+        .select('id')
+        .eq('id', user.id)
+        .maybeSingle();
+
+      if (!profileCheck) {
+        const { error: insErr } = await supabase
+          .from('profiles')
+          .upsert({
+            id: user.id,
+            full_name: user.user_metadata?.full_name || user.email || 'Admin',
+            role: 'admin'
+          });
+        if (insErr) {
+          console.warn('Could not auto-create user profile in database:', insErr);
+        }
       }
     }
 
     // 1. Upsert tournament header
+    const tourneyPayload: any = {
+      id: tournament.id,
+      name: tournament.name,
+      date: tournament.date,
+      location: tournament.location || '',
+      status: 'active',
+      updated_at: new Date().toISOString()
+    };
+    if (user?.id) {
+      tourneyPayload.owner_id = user.id;
+    }
+
     const { error: tError } = await supabase
       .from('tournaments')
-      .upsert({
-        id: tournament.id,
-        owner_id: user.id,
-        name: tournament.name,
-        date: tournament.date,
-        location: tournament.location || '',
-        status: 'active',
-        updated_at: new Date().toISOString()
-      });
+      .upsert(tourneyPayload);
 
-    if (tError) throw tError;
+    if (tError) {
+      throw new Error(`[Tournaments Table] ${tError.message || tError.details || JSON.stringify(tError)}`);
+    }
 
     // To prevent orphans and maintain a clean state, we delete existing child records 
     // for this tournament and insert the current ones in a fresh batch.

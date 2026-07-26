@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Division, Entry, DivisionSettings } from '../types';
 import { Settings, Users, Plus, Trash2, Edit2, Check, ShieldAlert, Shuffle, Sparkles, UserCheck, FileSpreadsheet } from 'lucide-react';
 import ExcelImportModal from './ExcelImportModal';
@@ -45,38 +45,63 @@ export default function DivisionEntries({ division, isDouble, onUpdateDivision, 
 
   const [showExcelModal, setShowExcelModal] = useState(false);
 
-  // Dynamic pool of players loaded from localStorage or falling back to defaults
+  // Dynamic pool of players
   const [poolPlayers, setPoolPlayers] = useState<string[]>(() => {
-    const saved = localStorage.getItem('paindo_pool_players');
-    if (saved) {
-      try {
-        return JSON.parse(saved);
-      } catch (e) {
-        // ignore error
-      }
+    const defaultList = [...PAINDO_PLAYERS];
+    if (division?.entries) {
+      division.entries.forEach(e => {
+        if (e.name1 && e.name1 !== 'BYE / Pemain Cadangan' && !defaultList.includes(e.name1)) {
+          defaultList.push(e.name1);
+        }
+        if (e.name2 && e.name2 !== 'BYE / Pemain Cadangan' && !defaultList.includes(e.name2)) {
+          defaultList.push(e.name2);
+        }
+      });
     }
-    return PAINDO_PLAYERS;
+    return defaultList;
   });
 
   const [newPlayerName, setNewPlayerName] = useState('');
 
   // Pool of players currently present/checked for random pairing
   const [checkedPlayers, setCheckedPlayers] = useState<string[]>(() => {
-    const saved = localStorage.getItem('paindo_pool_players');
-    let players = PAINDO_PLAYERS;
-    if (saved) {
-      try {
-        players = JSON.parse(saved);
-      } catch (e) {}
+    const initialChecked = PAINDO_PLAYERS.slice(0, Math.min(24, PAINDO_PLAYERS.length));
+    if (division?.entries) {
+      division.entries.forEach(e => {
+        if (e.name1 && e.name1 !== 'BYE / Pemain Cadangan' && !initialChecked.includes(e.name1)) {
+          initialChecked.push(e.name1);
+        }
+        if (e.name2 && e.name2 !== 'BYE / Pemain Cadangan' && !initialChecked.includes(e.name2)) {
+          initialChecked.push(e.name2);
+        }
+      });
     }
-    // Default to first 24 players (or all if less than 24)
-    return players.slice(0, Math.min(24, players.length));
+    return initialChecked;
   });
 
-  // Helper to save pool players and update state
+  // Ensure any newly added division entry names are automatically present in pool
+  useEffect(() => {
+    if (!division?.entries) return;
+    setPoolPlayers(prev => {
+      const updated = [...prev];
+      let changed = false;
+      division.entries.forEach(e => {
+        if (e.name1 && e.name1 !== 'BYE / Pemain Cadangan' && !updated.includes(e.name1)) {
+          updated.push(e.name1);
+          changed = true;
+        }
+        if (e.name2 && e.name2 !== 'BYE / Pemain Cadangan' && !updated.includes(e.name2)) {
+          updated.push(e.name2);
+          changed = true;
+        }
+      });
+      return changed ? updated : prev;
+    });
+  }, [division?.entries]);
+
+  // Helper to update pool players state
   const updatePoolPlayersList = (newPool: string[]) => {
     setPoolPlayers(newPool);
-    localStorage.setItem('paindo_pool_players', JSON.stringify(newPool));
   };
 
   const handleAddPoolPlayer = (e: React.FormEvent) => {

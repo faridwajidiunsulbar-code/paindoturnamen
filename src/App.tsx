@@ -109,21 +109,8 @@ import {
   Trash2
 } from 'lucide-react';
 
-const LOCAL_STORAGE_KEY = 'pickleball_tournament_data_v1';
-
 export default function App() {
   const [tournament, setTournament] = useState<Tournament>(() => {
-    const saved = localStorage.getItem(LOCAL_STORAGE_KEY);
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        if (parsed && parsed.id && parsed.name) {
-          return sanitizeTournamentData(parsed);
-        }
-      } catch (e) {
-        console.error('Error parsing tournament data from localStorage', e);
-      }
-    }
     return sanitizeTournamentData(getInitialTournament());
   });
 
@@ -178,15 +165,21 @@ export default function App() {
     }
   }, []);
 
-  // Load tournament from URL query parameter or fetch the latest created tournament on load
+  // Load tournament from URL query parameter if present, or fetch latest tournament from Supabase Cloud on startup
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const urlTId = params.get('t') || params.get('id');
 
-    if (urlTId && isSupabaseConfigured) {
-      const loadFromUrl = async () => {
+    if (isSupabaseConfigured) {
+      const loadFromCloud = async () => {
         setIsSyncing('syncing');
-        const loaded = await loadTournamentFromSupabase(urlTId);
+        let loaded: Tournament | null = null;
+        if (urlTId) {
+          loaded = await loadTournamentFromSupabase(urlTId);
+        } else {
+          loaded = await getLatestTournamentFromSupabase();
+        }
+
         if (loaded) {
           setTournament(loaded);
           setIsSyncing('synced');
@@ -196,34 +189,11 @@ export default function App() {
           } else {
             setSelectedDivisionId('');
           }
-          showToast('Turnamen berhasil dimuat dari tautan cloud!', 'success');
-        } else {
-          setIsSyncing('error');
-          showToast('Gagal memuat turnamen dari tautan cloud.', 'error');
-        }
-      };
-      loadFromUrl();
-    } else if (isSupabaseConfigured) {
-      // Direct access (e.g. root URL): always fetch the latest created tournament from Supabase Cloud so viewers get up-to-date data
-      const loadLatest = async () => {
-        setIsSyncing('syncing');
-        const latest = await getLatestTournamentFromSupabase();
-        
-        if (latest) {
-          setTournament(latest);
-          localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(latest));
-          setIsSyncing('synced');
-          setSelectedMenu('dashboard');
-          if (latest.activeDivisions && latest.activeDivisions.length > 0) {
-            setSelectedDivisionId(latest.activeDivisions[0].id);
-          } else {
-            setSelectedDivisionId('');
-          }
         } else {
           setIsSyncing('idle');
         }
       };
-      loadLatest();
+      loadFromCloud();
     }
   }, []);
 
@@ -242,7 +212,6 @@ export default function App() {
 
     if (refreshed) {
       setTournament(refreshed);
-      localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(refreshed));
       setIsSyncing('synced');
       showToast('Data turnamen berhasil diperbarui dari Cloud!', 'success');
     } else {
@@ -265,14 +234,8 @@ export default function App() {
     refreshOnlineTournamentsList();
   }, [user]);
 
-  // Sync to local storage and Supabase (if logged in)
+  // Sync tournament changes directly to Supabase Cloud
   useEffect(() => {
-    // 1. Sync to local storage always (offline first) if valid ID
-    if (tournament && tournament.id) {
-      localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(tournament));
-    }
-    
-    // 2. Sync to Supabase in the background if logged in AND valid tournament ID/name exists
     if (user && isSupabaseConfigured && tournament && tournament.id && tournament.name !== 'Belum Ada Turnamen') {
       const performSync = async () => {
         setIsSyncing('syncing');
@@ -285,8 +248,11 @@ export default function App() {
           return () => clearTimeout(timer);
         } else {
           setIsSyncing('error');
-          const lastErr = (window as any).lastSupabaseError || 'Gagal sinkronisasi data turnamen ke cloud.';
-          showToast(`Gagal Sinkronisasi: ${lastErr}`, 'error');
+          console.warn('Supabase sync message:', (window as any).lastSupabaseError);
+          if (user) {
+            const lastErr = (window as any).lastSupabaseError || 'Gagal sinkronisasi data turnamen ke cloud.';
+            showToast(`Supabase Sync Error: ${lastErr}`, 'error');
+          }
         }
       };
       
@@ -316,21 +282,6 @@ export default function App() {
       ...tournament,
       activeDivisions: updatedDivisions
     }));
-  };
-
-  // Reset to demo template data
-  const handleResetToDemo = () => {
-    setShowConfirm({
-      title: 'Muat Ulang Data Demo',
-      message: 'Apakah Anda yakin ingin memuat ulang Data Demo? Seluruh data pendaftaran dan skor turnamen saat ini akan ditimpa.',
-      onConfirm: () => {
-        setTournament(getInitialTournament());
-        setSelectedMenu('dashboard');
-        setSelectedDivisionId('');
-        setShowConfirm(null);
-        showToast('Data demo berhasil dimuat!', 'success');
-      }
-    });
   };
 
   // Trigger Create Tournament Modal
@@ -377,7 +328,6 @@ export default function App() {
     };
 
     setTournament(newTournament);
-    localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(newTournament));
     setSelectedMenu('config');
     setSelectedDivisionId('');
     showToast(`Turnamen baru "${data.name}" berhasil dibuat!`, 'success');
@@ -462,8 +412,6 @@ export default function App() {
         setShowConfirm(null);
         
         if (success) {
-          localStorage.removeItem(LOCAL_STORAGE_KEY);
-          
           // Refresh list of remaining user tournaments
           const remainingList = await listUserTournaments();
           setOnlineTournaments(remainingList);
@@ -763,15 +711,6 @@ export default function App() {
 
         {/* Sidebar Footer: Data control */}
         <div className="p-4 border-t border-navy-light/40 space-y-2 bg-navy-light/20" id="sidebar-footer">
-          {isAdmin && !user && (
-            <button
-              onClick={handleResetToDemo}
-              className="w-full px-3 py-2 bg-navy-light hover:bg-navy-light/80 text-slate-300 rounded-lg text-[11px] font-bold transition flex items-center justify-center gap-1.5"
-              id="reset-demo-action"
-            >
-              <RotateCcw className="h-3.5 w-3.5 text-neon" /> Muat Ulang Data Demo
-            </button>
-          )}
           {isAdmin && (
             <button
               onClick={handleStartFresh}
