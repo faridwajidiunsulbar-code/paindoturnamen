@@ -5,8 +5,8 @@
 
 import React, { useState } from 'react';
 import { Division, Entry, DivisionSettings } from '../types';
-import { Settings, Users, Plus, Trash2, Edit2, Check, ShieldAlert, Shuffle, Sparkles, UserCheck } from 'lucide-react';
-import { createGandaPutraDivisionFromImage } from '../data/imageDataPreset';
+import { Settings, Users, Plus, Trash2, Edit2, Check, ShieldAlert, Shuffle, Sparkles, UserCheck, FileSpreadsheet } from 'lucide-react';
+import ExcelImportModal from './ExcelImportModal';
 
 export const PAINDO_PLAYERS = [
   'Farid', 'Iswan', 'Nadja', 'Noor Irwandi', 'Akram', 'Haedar', 'Amri', 'Pandi', 
@@ -42,6 +42,8 @@ export default function DivisionEntries({ division, isDouble, onUpdateDivision, 
     message: string;
     onConfirm: () => void;
   } | null>(null);
+
+  const [showExcelModal, setShowExcelModal] = useState(false);
 
   // Dynamic pool of players loaded from localStorage or falling back to defaults
   const [poolPlayers, setPoolPlayers] = useState<string[]>(() => {
@@ -233,15 +235,36 @@ export default function DivisionEntries({ division, isDouble, onUpdateDivision, 
     });
   };
 
-  // Import 17 pairs and Pool A-D from the image note
-  const handleImportImageData = () => {
-    const rand = Math.random().toString(36).substring(2, 7);
-    const newDiv = createGandaPutraDivisionFromImage(rand, division.eventId, division.ageGroupId);
-    onUpdateDivision(newDiv);
-    setShowAlert({
-      title: 'Data Berhasil Dimuat! 🎯',
-      message: '17 Pasangan ganda dan 4 Pool (Pool A, Pool B, Pool C, Pool D) dari catatan gambar telah berhasil dimasukkan lengkap dengan jadwal pertandingannya.'
-    });
+  // Handle Excel / Spreadsheet / CSV / Paste Import
+  const handleExcelImport = (importedEntries: Entry[], mode: 'append' | 'replace') => {
+    let newEntriesList: Entry[] = [];
+
+    if (mode === 'replace') {
+      newEntriesList = importedEntries;
+      onUpdateDivision({
+        ...division,
+        entries: newEntriesList,
+        groups: [],
+        roundRobinMatches: [],
+        knockoutStage: null,
+        champions: null
+      });
+      setShowAlert({
+        title: 'Impor Berhasil! 📊',
+        message: `Berhasil mengganti seluruh daftar peserta dengan ${importedEntries.length} peserta baru dari Excel/Spreadsheet. Struktur grup & jadwal sebelumnya telah diset ulang.`
+      });
+    } else {
+      // Append mode: retain existing and append imported
+      newEntriesList = [...division.entries, ...importedEntries];
+      onUpdateDivision({
+        ...division,
+        entries: newEntriesList
+      });
+      setShowAlert({
+        title: 'Impor Berhasil! 📊',
+        message: `Berhasil menambahkan ${importedEntries.length} peserta baru dari Excel/Spreadsheet ke daftar peserta terdaftar.`
+      });
+    }
   };
 
   // Start inline editing
@@ -747,11 +770,12 @@ export default function DivisionEntries({ division, isDouble, onUpdateDivision, 
               {isAdmin && (
                 <button
                   type="button"
-                  onClick={handleImportImageData}
-                  className="px-3.5 py-2 bg-navy hover:bg-navy-light text-neon border border-neon/30 rounded-xl font-black text-xs flex items-center gap-2 transition card-shadow shadow-xs hover:-translate-y-0.5"
-                  title="Muat 17 Pasangan & Pembagian Pool A-D dari Catatan Gambar"
+                  onClick={() => setShowExcelModal(true)}
+                  className="px-3.5 py-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl font-bold text-xs flex items-center gap-2 transition card-shadow shadow-xs hover:-translate-y-0.5"
+                  title="Impor Peserta dari File Excel / CSV atau Copy-Paste Spreadsheet"
+                  id="btn-open-excel-modal"
                 >
-                  <Sparkles className="h-4 w-4 text-neon" /> 📷 Impor Data Gambar (17 Pasang / Pool A-D)
+                  <FileSpreadsheet className="h-4 w-4" /> 📊 Impor Excel / Spreadsheet
                 </button>
               )}
             </div>
@@ -967,6 +991,16 @@ export default function DivisionEntries({ division, isDouble, onUpdateDivision, 
             </div>
           </div>
         </div>
+      )}
+
+      {showExcelModal && (
+        <ExcelImportModal
+          isOpen={showExcelModal}
+          isDouble={isDouble}
+          divisionName={`${division.eventName} ${division.ageGroupName}`}
+          onClose={() => setShowExcelModal(false)}
+          onImport={handleExcelImport}
+        />
       )}
 
     </div>
