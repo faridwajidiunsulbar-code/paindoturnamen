@@ -106,13 +106,30 @@ import {
   AlertCircle,
   Share2,
   Link,
-  Trash2
+  Trash2,
+  Save,
+  CloudUpload,
+  HardDrive
 } from 'lucide-react';
 
 export default function App() {
   const [tournament, setTournament] = useState<Tournament>(() => {
+    try {
+      const saved = localStorage.getItem('paindo_active_tournament_v2');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed && parsed.name) {
+          return sanitizeTournamentData(parsed);
+        }
+      }
+    } catch (e) {
+      console.warn('Gagal memuat data turnamen lokal:', e);
+    }
     return sanitizeTournamentData(getInitialTournament());
   });
+
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState<boolean>(false);
+  const [autoSyncEnabled, setAutoSyncEnabled] = useState<boolean>(false);
 
   // Supabase & Modal states
   const [user, setUser] = useState<any>(null);
@@ -165,7 +182,23 @@ export default function App() {
     }
   }, []);
 
-  // Load tournament from URL query parameter if present, or fetch latest tournament from Supabase Cloud on startup
+  // Centralized function to update tournament in state and persist to LocalStorage
+  const updateTournamentState = (updated: Tournament, isFromCloud = false) => {
+    const sanitized = sanitizeTournamentData(updated);
+    setTournament(sanitized);
+    try {
+      localStorage.setItem('paindo_active_tournament_v2', JSON.stringify(sanitized));
+    } catch (e) {
+      console.warn('Gagal menyimpan data turnamen ke LocalStorage:', e);
+    }
+    if (!isFromCloud) {
+      setHasUnsavedChanges(true);
+    } else {
+      setHasUnsavedChanges(false);
+    }
+  };
+
+  // Load tournament from URL parameter or Cloud on startup (preserving local state if user was editing)
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const urlTId = params.get('t') || params.get('id');
@@ -177,11 +210,15 @@ export default function App() {
         if (urlTId) {
           loaded = await loadTournamentFromSupabase(urlTId);
         } else {
-          loaded = await getLatestTournamentFromSupabase();
+          // If no explicit URL parameter, check if we already have local saved data
+          const hasLocalData = localStorage.getItem('paindo_active_tournament_v2');
+          if (!hasLocalData) {
+            loaded = await getLatestTournamentFromSupabase();
+          }
         }
 
         if (loaded) {
-          setTournament(loaded);
+          updateTournamentState(loaded, true);
           setIsSyncing('synced');
           setSelectedMenu('dashboard');
           if (loaded.activeDivisions && loaded.activeDivisions.length > 0) {
@@ -212,6 +249,32 @@ export default function App() {
     }
   }, [tournament?.id]);
 
+  // Manual save to Cloud Database on button click
+  const handleManualSaveToCloud = async () => {
+    if (!isSupabaseConfigured) {
+      showToast('Database Cloud belum terkonfigurasi.', 'error');
+      return;
+    }
+    if (!user) {
+      setIsAuthModalOpen(true);
+      showToast('Silakan masuk ke Akun Cloud (Admin) untuk menyimpan data ke Database Cloud.', 'info');
+      return;
+    }
+
+    setIsSyncing('syncing');
+    const success = await saveTournamentToSupabase(tournament);
+    if (success) {
+      setIsSyncing('synced');
+      setHasUnsavedChanges(false);
+      refreshOnlineTournamentsList();
+      showToast('Berhasil! Jadwal pertandingan, skor, & klasemen DISIMPAN ke Database Cloud.', 'success');
+    } else {
+      setIsSyncing('error');
+      const lastErr = (window as any).lastSupabaseError || 'Gagal menyimpan ke database cloud.';
+      showToast(`Gagal menyimpan: ${lastErr}`, 'error');
+    }
+  };
+
   // Manual refresh from Cloud for users / spectators
   const handleRefreshFromCloud = async () => {
     if (!isSupabaseConfigured) return;
@@ -226,7 +289,7 @@ export default function App() {
     }
 
     if (refreshed) {
-      setTournament(refreshed);
+      updateTournamentState(refreshed, true);
       setIsSyncing('synced');
       showToast('Data turnamen berhasil diperbarui dari Cloud!', 'success');
     } else {
@@ -249,39 +312,32 @@ export default function App() {
     refreshOnlineTournamentsList();
   }, [user]);
 
-  // Sync tournament changes directly to Supabase Cloud
+  // Auto-Sync tournament changes to Supabase Cloud ONLY if autoSyncEnabled is active
   useEffect(() => {
-    if (user && isSupabaseConfigured && tournament && tournament.id && tournament.id !== '' && tournament.name !== 'Belum Ada Turnamen') {
+    if (autoSyncEnabled && user && isSupabaseConfigured && tournament && tournament.id && tournament.id !== '' && tournament.name !== 'Belum Ada Turnamen' && hasUnsavedChanges) {
       const performSync = async () => {
         setIsSyncing('syncing');
         const success = await saveTournamentToSupabase(tournament);
         if (success) {
           setIsSyncing('synced');
+          setHasUnsavedChanges(false);
           setShowSyncSuccessMsg(true);
           const timer = setTimeout(() => setShowSyncSuccessMsg(false), 2000);
-          refreshOnlineTournamentsList(); // refresh dropdown items
+          refreshOnlineTournamentsList();
           return () => clearTimeout(timer);
         } else {
           setIsSyncing('error');
-          console.warn('Supabase sync message:', (window as any).lastSupabaseError);
-          if (user) {
-            const lastErr = (window as any).lastSupabaseError || 'Gagal sinkronisasi data turnamen ke cloud.';
-            showToast(`Supabase Sync Error: ${lastErr}`, 'error');
-          }
         }
       };
       
-      // Debounce sync slightly to avoid rapid continuous writes
-      const timeoutId = setTimeout(performSync, 1000);
+      const timeoutId = setTimeout(performSync, 2000);
       return () => clearTimeout(timeoutId);
-    } else {
-      setIsSyncing('idle');
     }
-  }, [tournament, user]);
+  }, [tournament, user, autoSyncEnabled, hasUnsavedChanges]);
 
   // Handler to update the entire tournament object
   const handleTournamentUpdate = (updatedTournament: Tournament) => {
-    setTournament(sanitizeTournamentData(updatedTournament));
+    updateTournamentState(updatedTournament, false);
   };
 
   // Handler to update a specific active division's data
@@ -293,10 +349,10 @@ export default function App() {
       return div;
     });
 
-    setTournament(sanitizeTournamentData({
+    updateTournamentState({
       ...tournament,
       activeDivisions: updatedDivisions
-    }));
+    }, false);
   };
 
   // Trigger Create Tournament Modal with Admin check and Confirmation Popup
@@ -361,10 +417,10 @@ export default function App() {
       ownerId: user.id
     };
 
-    setTournament(newTournament);
+    updateTournamentState(newTournament, false);
     setSelectedMenu('config');
     setSelectedDivisionId('');
-    showToast(`Turnamen baru "${data.name}" berhasil dibuat!`, 'success');
+    showToast(`Turnamen baru "${data.name}" berhasil dibuat! Klik "Simpan ke Cloud" untuk menyimpannya ke database online.`, 'success');
   };
 
   // Load an online tournament from Supabase
@@ -373,7 +429,7 @@ export default function App() {
     setIsSyncing('syncing');
     const loaded = await loadTournamentFromSupabase(tId);
     if (loaded) {
-      setTournament(loaded);
+      updateTournamentState(loaded, true);
       setIsSyncing('synced');
       setSelectedMenu('dashboard');
       if (loaded.activeDivisions && loaded.activeDivisions.length > 0) {
@@ -576,23 +632,44 @@ export default function App() {
               </div>
               
               {/* Sync Indicators */}
-              <div className="flex items-center gap-2 text-[10px] text-slate-400 font-medium">
+              <div className="flex items-center justify-between text-[10px] text-slate-400 font-medium pt-1">
                 {isSyncing === 'syncing' && (
-                  <span className="flex items-center gap-1 text-neon/95">
-                    <RefreshCw className="h-3 w-3 animate-spin text-neon" /> Sinkronisasi database...
+                  <span className="flex items-center gap-1 text-neon/95 font-semibold">
+                    <RefreshCw className="h-3 w-3 animate-spin text-neon" /> Menyimpan data...
                   </span>
                 )}
-                {isSyncing === 'synced' && (
+                {isSyncing === 'synced' && !hasUnsavedChanges && (
                   <span className="flex items-center gap-1 text-emerald-400 font-bold">
-                    <CheckCircle2 className="h-3.5 w-3.5" /> Database sinkron
+                    <CheckCircle2 className="h-3.5 w-3.5" /> Database Sinkron
+                  </span>
+                )}
+                {hasUnsavedChanges && (
+                  <span className="flex items-center gap-1 text-amber-400 font-bold animate-pulse">
+                    <AlertCircle className="h-3.5 w-3.5" /> Ada Perubahan Belum Disimpan
                   </span>
                 )}
                 {isSyncing === 'error' && (
                   <span className="flex items-center gap-1 text-rose-400 font-bold">
-                    <AlertCircle className="h-3.5 w-3.5" /> Gagal sinkronisasi
+                    <AlertCircle className="h-3.5 w-3.5" /> Gagal Sinkronisasi
                   </span>
                 )}
               </div>
+
+              {isAdmin && (
+                <button
+                  onClick={handleManualSaveToCloud}
+                  disabled={isSyncing === 'syncing'}
+                  className={`w-full py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider transition flex items-center justify-center gap-1.5 shadow-sm cursor-pointer ${
+                    hasUnsavedChanges
+                      ? 'bg-amber-500 hover:bg-amber-600 text-slate-900 border border-amber-300 animate-pulse'
+                      : 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                  }`}
+                  id="sidebar-manual-save-btn"
+                >
+                  <CloudUpload className="h-3.5 w-3.5" />
+                  <span>{hasUnsavedChanges ? 'Simpan Perubahan ke Cloud (!)' : 'Simpan ke Cloud Database'}</span>
+                </button>
+              )}
 
               {/* Online Tournament Selector */}
               {onlineTournaments.length > 0 && (
@@ -781,7 +858,60 @@ export default function App() {
             </p>
           </div>
 
-          <div className="flex items-center gap-3 text-xs text-slate-500 font-medium" id="top-navbar-stats">
+          <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500 font-medium" id="top-navbar-stats">
+            {/* Local Storage Indicator Badge */}
+            <div className="flex items-center gap-1.5 px-2.5 py-1.5 bg-slate-100/80 rounded-lg text-xs font-semibold text-slate-700 border border-slate-200/80" title="Data tersimpan otomatis di browser lokal">
+              <HardDrive className="h-3.5 w-3.5 text-indigo-600" />
+              <span className="hidden sm:inline">Lokal:</span>
+              <span className="font-bold text-slate-800">Tersimpan</span>
+              {hasUnsavedChanges && (
+                <span className="flex h-2 w-2 relative" title="Ada perubahan belum tersimpan di Cloud Database">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span>
+                </span>
+              )}
+            </div>
+
+            {/* Manual Save to Cloud Button */}
+            {isAdmin && isSupabaseConfigured && (
+              <button
+                onClick={handleManualSaveToCloud}
+                disabled={isSyncing === 'syncing'}
+                className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-black transition duration-200 shadow-sm cursor-pointer disabled:opacity-50 ${
+                  hasUnsavedChanges
+                    ? 'bg-amber-500 hover:bg-amber-600 text-slate-900 border border-amber-300 animate-pulse'
+                    : 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                }`}
+                title="Simpan Hasil Pertandingan, Skor, Jadwal & Klasemen ke Database Cloud"
+                id="manual-save-cloud-top-btn"
+              >
+                <CloudUpload className="h-4 w-4" />
+                <span>
+                  {isSyncing === 'syncing' 
+                    ? 'Menyimpan...' 
+                    : hasUnsavedChanges 
+                      ? 'Simpan ke Cloud (!)' 
+                      : 'Simpan ke Cloud'}
+                </span>
+              </button>
+            )}
+
+            {/* Auto-Sync Toggle Switch */}
+            {isAdmin && isSupabaseConfigured && (
+              <label 
+                className="hidden lg:flex items-center gap-1.5 text-xs font-bold text-slate-600 cursor-pointer select-none px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg hover:bg-slate-100 transition"
+                title="Aktifkan untuk menyimpan setiap perubahan ke database secara otomatis"
+              >
+                <input
+                  type="checkbox"
+                  checked={autoSyncEnabled}
+                  onChange={(e) => setAutoSyncEnabled(e.target.checked)}
+                  className="rounded text-emerald-600 focus:ring-emerald-500 h-3.5 w-3.5 cursor-pointer"
+                />
+                <span className="text-[11px]">Auto-Sync Cloud</span>
+              </label>
+            )}
+
             {isAdmin && (
               <button
                 onClick={() => exportTournamentToPDF(tournament)}
@@ -790,20 +920,21 @@ export default function App() {
                 id="export-pdf-top-btn"
               >
                 <Download className="h-3.5 w-3.5" />
-                <span>Unduh PDF</span>
+                <span className="hidden sm:inline">Unduh PDF</span>
               </button>
             )}
+
             {isSupabaseConfigured && (
               <>
                 <button
                   onClick={handleRefreshFromCloud}
                   disabled={isSyncing === 'syncing'}
                   className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-lg text-xs transition duration-200 shadow-xs disabled:opacity-50"
-                  title="Segarkan Data Terbaru dari Cloud"
+                  title="Segarkan Data Terbaru dari Cloud Database"
                   id="refresh-cloud-top-btn"
                 >
                   <RefreshCw className={`h-3.5 w-3.5 ${isSyncing === 'syncing' ? 'animate-spin text-neon' : 'text-slate-500'}`} />
-                  <span>{isSyncing === 'syncing' ? 'Memuat...' : 'Segarkan'}</span>
+                  <span className="hidden sm:inline">{isSyncing === 'syncing' ? 'Memuat...' : 'Segarkan'}</span>
                 </button>
 
                 <button
