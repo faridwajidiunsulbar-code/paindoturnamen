@@ -746,7 +746,7 @@ export async function deleteTournamentFromSupabase(tournamentId: string): Promis
   }
 }
 
-// Fetch the single most recently created tournament from Supabase
+// Fetch the single most recently updated or created tournament from Supabase
 export async function getLatestTournamentFromSupabase(): Promise<Tournament | null> {
   if (!isSupabaseConfigured) return null;
 
@@ -754,6 +754,7 @@ export async function getLatestTournamentFromSupabase(): Promise<Tournament | nu
     const { data, error } = await supabase
       .from('tournaments')
       .select('id')
+      .order('updated_at', { ascending: false, nullsFirst: false })
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle();

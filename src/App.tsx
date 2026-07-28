@@ -197,6 +197,21 @@ export default function App() {
     }
   }, []);
 
+  // Keep URL query parameter ?t=... in sync with active tournament ID so refresh preserves active tournament
+  useEffect(() => {
+    if (tournament && tournament.id && tournament.id !== '') {
+      try {
+        const currentUrl = new URL(window.location.href);
+        if (currentUrl.searchParams.get('t') !== tournament.id) {
+          currentUrl.searchParams.set('t', tournament.id);
+          window.history.replaceState({}, '', currentUrl.toString());
+        }
+      } catch (e) {
+        console.warn('URL state update error:', e);
+      }
+    }
+  }, [tournament?.id]);
+
   // Manual refresh from Cloud for users / spectators
   const handleRefreshFromCloud = async () => {
     if (!isSupabaseConfigured) return;
