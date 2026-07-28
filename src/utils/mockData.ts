@@ -22,19 +22,13 @@ export const DEFAULT_AGE_GROUPS: AgeGroup[] = [
 ];
 
 export function getInitialTournament(): Tournament {
-  const rand = Math.random().toString(36).substring(2, 7);
-  const tId = `t-${Date.now()}`;
-  
-  const events = DEFAULT_EVENTS.map(ev => ({ ...ev, id: `${ev.id}-${rand}` }));
-  const ageGroups = DEFAULT_AGE_GROUPS.map(ag => ({ ...ag, id: `${ag.id}-${rand}` }));
-
   return {
-    id: tId,
-    name: 'Turnamen Paindo Pickleball',
+    id: '',
+    name: 'Belum Ada Turnamen',
     date: new Date().toISOString().split('T')[0],
     location: '',
-    events,
-    ageGroups,
+    events: DEFAULT_EVENTS,
+    ageGroups: DEFAULT_AGE_GROUPS,
     activeDivisions: []
   };
 }

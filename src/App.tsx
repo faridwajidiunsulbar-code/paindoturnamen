@@ -236,7 +236,7 @@ export default function App() {
 
   // Sync tournament changes directly to Supabase Cloud
   useEffect(() => {
-    if (user && isSupabaseConfigured && tournament && tournament.id && tournament.name !== 'Belum Ada Turnamen') {
+    if (user && isSupabaseConfigured && tournament && tournament.id && tournament.id !== '' && tournament.name !== 'Belum Ada Turnamen') {
       const performSync = async () => {
         setIsSyncing('syncing');
         const success = await saveTournamentToSupabase(tournament);
@@ -284,9 +284,22 @@ export default function App() {
     }));
   };
 
-  // Trigger Create Tournament Modal
+  // Trigger Create Tournament Modal with Admin check and Confirmation Popup
   const handleStartFresh = () => {
-    setIsCreateModalOpen(true);
+    if (!user) {
+      setIsAuthModalOpen(true);
+      showToast('Akses Ditolak: Anda harus masuk sebagai Admin terlebih dahulu untuk membuat turnamen baru.', 'error');
+      return;
+    }
+
+    setShowConfirm({
+      title: 'Konfirmasi Buat Turnamen Baru',
+      message: 'Apakah Anda yakin ingin membuat turnamen baru? Kredensial Admin Anda akan digunakan sebagai pemilik turnamen.',
+      onConfirm: () => {
+        setShowConfirm(null);
+        setIsCreateModalOpen(true);
+      }
+    });
   };
 
   // Handler for creating a new validated tournament from modal
@@ -296,6 +309,12 @@ export default function App() {
     location: string;
     sportType: 'badminton' | 'pickleball' | 'tennis' | 'table_tennis' | 'other';
   }) => {
+    if (!user) {
+      setIsAuthModalOpen(true);
+      showToast('Akses Ditolak: Hanya Admin yang terautentikasi yang dapat membuat turnamen.', 'error');
+      return;
+    }
+
     const rand = Math.random().toString(36).substring(2, 7);
     const tId = `t-${Date.now()}`;
     
@@ -324,7 +343,7 @@ export default function App() {
       events: events.map(ev => ({ ...ev, id: `${ev.id}-${rand}` })),
       ageGroups: DEFAULT_AGE_GROUPS.map(ag => ({ ...ag, id: `${ag.id}-${rand}` })),
       activeDivisions: [],
-      ownerId: user?.id
+      ownerId: user.id
     };
 
     setTournament(newTournament);
