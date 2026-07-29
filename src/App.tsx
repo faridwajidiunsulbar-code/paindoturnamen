@@ -29,6 +29,24 @@ import { exportTournamentToPDF } from './utils/pdfExport';
 import { generateRoundRobinMatches } from './utils/tournamentHelpers';
 import { Match } from './types';
 
+function getTournamentDataScore(t: Tournament | null): number {
+  if (!t || !t.activeDivisions) return 0;
+  let score = t.activeDivisions.length * 100;
+  t.activeDivisions.forEach(div => {
+    score += (div.entries?.length || 0) * 10;
+    score += (div.groups?.length || 0) * 5;
+    score += (div.roundRobinMatches?.length || 0) * 2;
+    score += (div.knockoutStage?.matches?.length || 0) * 2;
+    if (div.roundRobinMatches) {
+      score += div.roundRobinMatches.filter(m => m.status === 'selesai' || m.score1 !== undefined).length * 5;
+    }
+    if (div.knockoutStage?.matches) {
+      score += div.knockoutStage.matches.filter(m => m.status === 'selesai' || m.score1 !== undefined).length * 5;
+    }
+  });
+  return score;
+}
+
 function sanitizeTournamentData(t: Tournament): Tournament {
   if (!t || !t.activeDivisions) return t;
 
@@ -188,6 +206,9 @@ export default function App() {
     setTournament(sanitized);
     try {
       localStorage.setItem('paindo_active_tournament_v2', JSON.stringify(sanitized));
+      if (sanitized.activeDivisions && sanitized.activeDivisions.length > 0) {
+        localStorage.setItem('paindo_active_tournament_backup', JSON.stringify(sanitized));
+      }
     } catch (e) {
       console.warn('Gagal menyimpan data turnamen ke LocalStorage:', e);
     }
@@ -203,6 +224,15 @@ export default function App() {
     const params = new URLSearchParams(window.location.search);
     const urlTId = params.get('t') || params.get('id');
 
+    // Read current local saved state
+    let localSaved: Tournament | null = null;
+    try {
+      const raw = localStorage.getItem('paindo_active_tournament_v2') || localStorage.getItem('paindo_active_tournament_backup');
+      if (raw) localSaved = JSON.parse(raw);
+    } catch (e) {}
+
+    const localScore = getTournamentDataScore(localSaved);
+
     if (isSupabaseConfigured) {
       const loadFromCloud = async () => {
         setIsSyncing('syncing');
@@ -210,19 +240,30 @@ export default function App() {
         if (urlTId) {
           loaded = await loadTournamentFromSupabase(urlTId);
         } else {
-          // If no explicit URL parameter, check if we already have local saved data
-          const hasLocalData = localStorage.getItem('paindo_active_tournament_v2');
-          if (!hasLocalData) {
+          // If no explicit URL parameter, query latest cloud ONLY if local is empty or minimal
+          if (localScore === 0) {
             loaded = await getLatestTournamentFromSupabase();
           }
         }
 
         if (loaded) {
-          updateTournamentState(loaded, true);
-          setIsSyncing('synced');
+          const cloudScore = getTournamentDataScore(loaded);
+          
+          // SAFETY GUARD: If local data is richer than cloud data, DO NOT overwrite local data!
+          if (localSaved && localScore > cloudScore) {
+            console.warn('Local tournament has richer data than Cloud. Preserving local state.');
+            updateTournamentState(localSaved, false); // Mark unsaved changes = true so user can push to Cloud
+            setIsSyncing('synced');
+            showToast('Data lokal Anda dipulihkan (lebih lengkap dari Cloud). Klik "Simpan ke Cloud" jika ingin menyinkronkan ke Cloud.', 'info');
+          } else {
+            updateTournamentState(loaded, true);
+            setIsSyncing('synced');
+          }
+
           setSelectedMenu('dashboard');
-          if (loaded.activeDivisions && loaded.activeDivisions.length > 0) {
-            setSelectedDivisionId(loaded.activeDivisions[0].id);
+          const targetDivisions = (localSaved && localScore > cloudScore) ? localSaved.activeDivisions : loaded.activeDivisions;
+          if (targetDivisions && targetDivisions.length > 0) {
+            setSelectedDivisionId(targetDivisions[0].id);
           } else {
             setSelectedDivisionId('');
           }
@@ -289,6 +330,15 @@ export default function App() {
     }
 
     if (refreshed) {
+      const localScore = getTournamentDataScore(tournament);
+      const cloudScore = getTournamentDataScore(refreshed);
+
+      if (localScore > cloudScore && hasUnsavedChanges) {
+        showToast('Data di browser Anda memiliki perubahan baru yang belum disimpan ke Cloud. Gunakan tombol "Simpan ke Cloud" terlebih dahulu.', 'info');
+        setIsSyncing('synced');
+        return;
+      }
+
       updateTournamentState(refreshed, true);
       setIsSyncing('synced');
       showToast('Data turnamen berhasil diperbarui dari Cloud!', 'success');
@@ -429,6 +479,15 @@ export default function App() {
     setIsSyncing('syncing');
     const loaded = await loadTournamentFromSupabase(tId);
     if (loaded) {
+      const localScore = getTournamentDataScore(tournament);
+      const cloudScore = getTournamentDataScore(loaded);
+
+      if (tournament.id === tId && localScore > cloudScore && hasUnsavedChanges) {
+        showToast('Turnamen lokal memiliki data lebih baru dibanding Cloud. Gunakan tombol "Simpan ke Cloud" untuk memperbarui data Cloud.', 'info');
+        setIsSyncing('synced');
+        return;
+      }
+
       updateTournamentState(loaded, true);
       setIsSyncing('synced');
       setSelectedMenu('dashboard');
@@ -437,7 +496,7 @@ export default function App() {
       } else {
         setSelectedDivisionId('');
       }
-      showToast('Berhasil memuat turnamen dari cloud!', 'success');
+      showToast(`Berhasil memuat turnamen "${loaded.name}" dari Cloud!`, 'success');
     } else {
       setIsSyncing('error');
       showToast('Gagal memuat data turnamen dari cloud. Periksa hak akses Anda.', 'error');
