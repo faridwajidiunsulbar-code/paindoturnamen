@@ -133,7 +133,7 @@ import {
 export default function App() {
   const [tournament, setTournament] = useState<Tournament>(() => {
     try {
-      const saved = localStorage.getItem('paindo_active_tournament_v2');
+      const saved = localStorage.getItem('paindo_active_tournament_v2') || localStorage.getItem('paindo_active_tournament_backup');
       if (saved) {
         const parsed = JSON.parse(saved);
         if (parsed && parsed.name) {
@@ -219,53 +219,49 @@ export default function App() {
     }
   };
 
-  // Load tournament from URL parameter or Cloud on startup (preserving local state if user was editing)
+  // Startup effect: Always preserve local saved state on page refresh.
+  // Do NOT fetch or overwrite from Cloud automatically when refreshed.
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const urlTId = params.get('t') || params.get('id');
-
-    // Read current local saved state
     let localSaved: Tournament | null = null;
     try {
       const raw = localStorage.getItem('paindo_active_tournament_v2') || localStorage.getItem('paindo_active_tournament_backup');
       if (raw) localSaved = JSON.parse(raw);
     } catch (e) {}
 
-    const localScore = getTournamentDataScore(localSaved);
+    const hasLocalContent = localSaved && (
+      (localSaved.activeDivisions && localSaved.activeDivisions.length > 0) ||
+      (localSaved.name && localSaved.name !== 'Belum Ada Turnamen')
+    );
 
+    if (hasLocalContent) {
+      // Local tournament is already restored via useState initial state. Just select first division if needed.
+      if (!selectedDivisionId && localSaved.activeDivisions && localSaved.activeDivisions.length > 0) {
+        setSelectedDivisionId(localSaved.activeDivisions[0].id);
+      }
+      setIsSyncing('synced');
+      return;
+    }
+
+    // Only if local storage is completely empty, attempt loading from Cloud as fallback
     if (isSupabaseConfigured) {
       const loadFromCloud = async () => {
+        const params = new URLSearchParams(window.location.search);
+        const urlTId = params.get('t') || params.get('id');
+
         setIsSyncing('syncing');
         let loaded: Tournament | null = null;
         if (urlTId) {
           loaded = await loadTournamentFromSupabase(urlTId);
         } else {
-          // If no explicit URL parameter, query latest cloud ONLY if local is empty or minimal
-          if (localScore === 0) {
-            loaded = await getLatestTournamentFromSupabase();
-          }
+          loaded = await getLatestTournamentFromSupabase();
         }
 
         if (loaded) {
-          const cloudScore = getTournamentDataScore(loaded);
-          
-          // SAFETY GUARD: If local data is richer than cloud data, DO NOT overwrite local data!
-          if (localSaved && localScore > cloudScore) {
-            console.warn('Local tournament has richer data than Cloud. Preserving local state.');
-            updateTournamentState(localSaved, false); // Mark unsaved changes = true so user can push to Cloud
-            setIsSyncing('synced');
-            showToast('Data lokal Anda dipulihkan (lebih lengkap dari Cloud). Klik "Simpan ke Cloud" jika ingin menyinkronkan ke Cloud.', 'info');
-          } else {
-            updateTournamentState(loaded, true);
-            setIsSyncing('synced');
-          }
-
+          updateTournamentState(loaded, true);
+          setIsSyncing('synced');
           setSelectedMenu('dashboard');
-          const targetDivisions = (localSaved && localScore > cloudScore) ? localSaved.activeDivisions : loaded.activeDivisions;
-          if (targetDivisions && targetDivisions.length > 0) {
-            setSelectedDivisionId(targetDivisions[0].id);
-          } else {
-            setSelectedDivisionId('');
+          if (loaded.activeDivisions && loaded.activeDivisions.length > 0) {
+            setSelectedDivisionId(loaded.activeDivisions[0].id);
           }
         } else {
           setIsSyncing('idle');
