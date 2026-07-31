@@ -62,30 +62,20 @@ function sanitizeTournamentData(t: Tournament): Tournament {
       return { ...g, name: cleanName };
     });
 
-    // 2. Check if roundRobinMatches exist or need auto-generating/updating
+    // 2. Check if roundRobinMatches exist and align group names if needed
     let matches = div.roundRobinMatches || [];
 
-    // If matches are empty but groups with assigned entries exist, auto-generate matches
-    if (matches.length === 0 && cleanGroups.length > 0 && cleanGroups.some(g => g.entryIds.length >= 2)) {
-      let autoMatches: Match[] = [];
-      cleanGroups.forEach(g => {
-        const groupMatches = generateRoundRobinMatches(div.id, g, div.entries || []);
-        autoMatches = [...autoMatches, ...groupMatches];
-      });
-      matches = autoMatches;
-    } else {
-      // Align match groupName with clean group names if needed
-      matches = matches.map(m => {
-        if (!m.groupName) return m;
-        let mGroupName = m.groupName;
-        if (mGroupName.startsWith('Grup Pool ')) {
-          mGroupName = mGroupName.replace('Grup Pool ', 'Pool ');
-        } else if (mGroupName.startsWith('Grup Grup ')) {
-          mGroupName = mGroupName.replace('Grup Grup ', 'Grup ');
-        }
-        return { ...m, groupName: mGroupName };
-      });
-    }
+    // Align match groupName with clean group names if needed
+    matches = matches.map(m => {
+      if (!m.groupName) return m;
+      let mGroupName = m.groupName;
+      if (mGroupName.startsWith('Grup Pool ')) {
+        mGroupName = mGroupName.replace('Grup Pool ', 'Pool ');
+      } else if (mGroupName.startsWith('Grup Grup ')) {
+        mGroupName = mGroupName.replace('Grup Grup ', 'Grup ');
+      }
+      return { ...m, groupName: mGroupName };
+    });
 
     return {
       ...div,

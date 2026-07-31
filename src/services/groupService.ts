@@ -1,5 +1,5 @@
 import { supabase, isSupabaseConfigured } from '../lib/supabaseClient';
-import { Tournament, Group, ServiceResult } from '../types';
+import { Tournament, Group, Division, Entry, ServiceResult } from '../types';
 import { getDbDivisionId } from './divisionService';
 import { getValidEntryId } from './entryService';
 import { saveTournamentToSupabase } from './tournamentService';
@@ -9,6 +9,141 @@ export const getDbGroupId = (id: string, dbDivId: string) => {
   if (id.includes(dbDivId)) return id;
   return `${id}-${dbDivId}`;
 };
+
+/**
+ * Checks if group structure is locked due to existing scores, knockout matches, or champions.
+ * Schedule creation without scores (hasMatches=true, hasScores=false) does NOT lock groups,
+ * but requires explicit confirmation to reset schedule.
+ */
+export interface GroupLockStatus {
+  isLocked: boolean;
+  hasMatches: boolean;
+  hasScores: boolean;
+  hasKnockout: boolean;
+  hasChampions: boolean;
+  reason?: string;
+}
+
+export function checkDivisionGroupLockStatus(division: Division): GroupLockStatus {
+  const matches = division.roundRobinMatches || [];
+  const hasMatches = matches.length > 0;
+
+  // Strict check: has actual score, finished status, or winner declared
+  const hasScores = matches.some(m => {
+    const hasActualScore = (m.score1 !== null && m.score1 !== undefined) || (m.score2 !== null && m.score2 !== undefined);
+    const isFinished = m.status === 'selesai' || m.status === 'walkover';
+    const hasWinner = m.winnerId !== null && m.winnerId !== undefined;
+    return hasActualScore || isFinished || hasWinner;
+  });
+
+  const hasKnockout = division.knockoutStage !== null && (division.knockoutStage.matches || []).length > 0;
+  const hasChampions = division.champions !== null && (
+    division.champions.firstPlaceEntryId !== null ||
+    division.champions.secondPlaceEntryId !== null ||
+    division.champions.thirdPlaceEntryId !== null
+  );
+
+  if (hasChampions) {
+    return {
+      isLocked: true,
+      hasMatches,
+      hasScores,
+      hasKnockout,
+      hasChampions,
+      reason: 'Turnamen telah selesai dan memiliki Juara. Struktur grup terkunci.'
+    };
+  }
+
+  if (hasKnockout) {
+    return {
+      isLocked: true,
+      hasMatches,
+      hasScores,
+      hasKnockout,
+      hasChampions,
+      reason: 'Fase Knockout (Gugur) telah terbentuk. Struktur grup terkunci.'
+    };
+  }
+
+  if (hasScores) {
+    return {
+      isLocked: true,
+      hasMatches,
+      hasScores,
+      hasKnockout,
+      hasChampions,
+      reason: 'Pertandingan pada fase grup sudah memiliki skor terinput. Struktur grup terkunci untuk menjaga integritas data.'
+    };
+  }
+
+  return {
+    isLocked: false,
+    hasMatches,
+    hasScores,
+    hasKnockout,
+    hasChampions
+  };
+}
+
+export interface GroupValidationResult {
+  cleanedGroups: Group[];
+  unassignedEntries: Entry[];
+  isValid: boolean;
+  invalidEntryIds: string[];
+  duplicateEntryIds: string[];
+  issues: string[];
+}
+
+/**
+ * Validates group integrity, detects stale entry IDs and duplicate memberships without mutating original source data.
+ * Returns proposed clean groups and report of issues.
+ */
+export function validateAndCleanGroups(groups: Group[], validEntries: Entry[]): GroupValidationResult {
+  const validEntryIdSet = new Set(validEntries.map(e => e.id));
+  const seenEntryIds = new Set<string>();
+  const invalidEntryIds: string[] = [];
+  const duplicateEntryIds: string[] = [];
+  const issues: string[] = [];
+
+  const cleanedGroups: Group[] = (groups || []).map((g, idx) => {
+    const code = String.fromCharCode(65 + idx); // A, B, C...
+    const cleanName = `Grup ${code}`;
+    const cleanEntryIds: string[] = [];
+
+    (g.entryIds || []).forEach(entId => {
+      if (!validEntryIdSet.has(entId)) {
+        invalidEntryIds.push(entId);
+        issues.push(`ID peserta [${entId}] tidak ditemukan dalam daftar peserta divisi.`);
+        return;
+      }
+      if (seenEntryIds.has(entId)) {
+        duplicateEntryIds.push(entId);
+        issues.push(`Peserta [${entId}] terdeteksi di lebih dari 1 grup.`);
+        return;
+      }
+      seenEntryIds.add(entId);
+      cleanEntryIds.push(entId);
+    });
+
+    return {
+      ...g,
+      name: cleanName,
+      entryIds: cleanEntryIds
+    };
+  });
+
+  const unassignedEntries = validEntries.filter(e => !seenEntryIds.has(e.id));
+  const isValid = invalidEntryIds.length === 0 && duplicateEntryIds.length === 0;
+
+  return {
+    cleanedGroups,
+    unassignedEntries,
+    isValid,
+    invalidEntryIds,
+    duplicateEntryIds,
+    issues
+  };
+}
 
 /**
  * Save division groups and group members to Supabase.
