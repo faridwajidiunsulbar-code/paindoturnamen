@@ -20,8 +20,9 @@ export async function updateKnockoutStage(
     return div;
   });
 
-  return saveTournamentToSupabase({
+  const res = await saveTournamentToSupabase({
     ...tournament,
     activeDivisions: updatedDivisions
   });
+  return res.success;
 }

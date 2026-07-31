@@ -152,22 +152,27 @@ export function calculateGroupStandings(
 
   // Sort according to rules
   rows.sort((a, b) => {
-    // 1. Wins
+    // 1. Wins (Jumlah Menang)
     if (b.won !== a.won) {
       return b.won - a.won;
     }
 
-    // 2. Point Difference
+    // 2. Points For (Jumlah poin kemenangan / pf)
+    if (b.pointsFor !== a.pointsFor) {
+      return b.pointsFor - a.pointsFor;
+    }
+
+    // 3. Point Difference (Selisih Poin: Poin Masuk - Poin Keluar)
     if (b.pointDifference !== a.pointDifference) {
       return b.pointDifference - a.pointDifference;
     }
 
-    // 3. Head to Head (only if exactly 2 players are tied at this exact Won & PointDiff stage)
-    const tiedOnWinsAndDiff = rows.filter(
-      r => r.won === a.won && r.pointDifference === a.pointDifference
+    // 4. Head to Head (hanya jika tepat 2 peserta seri pada Menang, Poin Masuk, dan Selisih Poin)
+    const tiedOnStats = rows.filter(
+      r => r.won === a.won && r.pointsFor === a.pointsFor && r.pointDifference === a.pointDifference
     );
 
-    if (tiedOnWinsAndDiff.length === 2) {
+    if (tiedOnStats.length === 2) {
       const h2hMatch = groupMatches.find(
         m =>
           (m.status === 'selesai' || m.status === 'walkover') &&
@@ -187,11 +192,6 @@ export function calculateGroupStandings(
       }
     }
 
-    // 4. Points For (poin masuk terbanyak)
-    if (b.pointsFor !== a.pointsFor) {
-      return b.pointsFor - a.pointsFor;
-    }
-
     // 5. Default/stable
     return 0;
   });
@@ -208,8 +208,8 @@ export function calculateGroupStandings(
     const tiedOthers = rankedRows.filter(
       rowB => rowB.entryId !== rowA.entryId &&
               rowB.won === rowA.won &&
-              rowB.pointDifference === rowA.pointDifference &&
-              rowB.pointsFor === rowA.pointsFor
+              rowB.pointsFor === rowA.pointsFor &&
+              rowB.pointDifference === rowA.pointDifference
     );
 
     if (tiedOthers.length > 0) {

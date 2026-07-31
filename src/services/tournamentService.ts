@@ -1,11 +1,13 @@
 import { supabase, isSupabaseConfigured } from '../lib/supabaseClient';
-import { Tournament, Division, TournamentEvent, AgeGroup, Entry, Group, Match, Champions, KnockoutStage } from '../types';
+import { Tournament, Division, TournamentEvent, AgeGroup, Entry, Group, Match, Champions, KnockoutStage, ServiceResult } from '../types';
 
 export interface UserProfile {
   id: string;
   full_name: string;
   role: string;
 }
+
+let isSaveInProgress = false;
 
 /**
  * Authentication and Profile Services
@@ -65,14 +67,30 @@ const getValidEntryId = (id: string | null | undefined, validEntryIds: Set<strin
 };
 
 // Save/Sync a complete tournament tree to the relational database
-export async function saveTournamentToSupabase(tournament: Tournament): Promise<boolean> {
-  if (!isSupabaseConfigured) return false;
+export async function saveTournamentToSupabase(tournament: Tournament): Promise<ServiceResult<boolean>> {
+  if (!isSupabaseConfigured) {
+    return {
+      success: false,
+      error: { message: 'Database Cloud (Supabase) belum terkonfigurasi.' }
+    };
+  }
+
+  if (isSaveInProgress) {
+    return {
+      success: false,
+      error: { message: 'Proses penyimpanan ke cloud sedang berlangsung. Mohon tunggu.' }
+    };
+  }
   
   const user = await getCurrentUser();
   if (!user) {
-    (window as any).lastSupabaseError = 'Silakan login terlebih dahulu untuk menyinkronkan data ke Supabase Cloud.';
-    return false;
+    return {
+      success: false,
+      error: { message: 'Silakan login terlebih dahulu untuk menyinkronkan data ke Supabase Cloud.' }
+    };
   }
+
+  isSaveInProgress = true;
 
   // Local helper functions to scope event/age/division IDs per tournament in the database
   const getDbEventId = (id: string) => {
@@ -459,13 +477,22 @@ export async function saveTournamentToSupabase(tournament: Tournament): Promise<
       }
     }
 
-    return true;
+    return { success: true, data: true };
   } catch (err: any) {
     console.error('Failed to save tournament to Supabase:', err);
+    const msg = err?.message || err?.details || (typeof err === 'string' ? err : 'Gagal menyimpan data turnamen ke Supabase Cloud.');
     if (typeof window !== 'undefined') {
-      (window as any).lastSupabaseError = err?.message || err?.details || JSON.stringify(err);
+      (window as any).lastSupabaseError = msg;
     }
-    return false;
+    return {
+      success: false,
+      error: {
+        message: msg,
+        details: err?.details || JSON.stringify(err)
+      }
+    };
+  } finally {
+    isSaveInProgress = false;
   }
 }
 

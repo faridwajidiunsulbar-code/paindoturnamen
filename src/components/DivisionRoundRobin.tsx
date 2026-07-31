@@ -320,10 +320,15 @@ export default function DivisionRoundRobin({ division, onUpdateDivision, isAdmin
           
           {/* COLUMN KIRI: KLASEMEN GRUP (XL: 5/12) */}
           <div className="xl:col-span-5 space-y-6" id="standings-column">
-            <h3 className="text-base font-extrabold text-navy flex items-center gap-1.5">
-              <Trophy className="h-5 w-5 text-neon stroke-navy fill-neon" />
-              Klasemen Grup Otomatis
-            </h3>
+            <div>
+              <h3 className="text-base font-extrabold text-navy flex items-center gap-1.5">
+                <Trophy className="h-5 w-5 text-neon stroke-navy fill-neon" />
+                Klasemen Grup Otomatis
+              </h3>
+              <p className="text-[11px] text-slate-500 font-medium mt-1 leading-snug">
+                Urutan Peringkat: <strong className="text-slate-700">1. Menang (W)</strong> ➔ <strong className="text-slate-700">2. Poin Masuk (PF)</strong> ➔ <strong className="text-slate-700">3. Selisih Poin (Diff)</strong> ➔ <strong className="text-slate-700">4. Head-to-Head</strong>
+              </p>
+            </div>
 
             {groups.map(group => {
               const rows = standingsByGroup[group.id] || [];

@@ -18,5 +18,6 @@ export async function updateDivisionInDatabase(
     activeDivisions: updatedDivisions
   };
 
-  return saveTournamentToSupabase(updatedTournament);
+  const res = await saveTournamentToSupabase(updatedTournament);
+  return res.success;
 }

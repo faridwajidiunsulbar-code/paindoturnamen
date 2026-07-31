@@ -200,9 +200,27 @@ export default function App() {
     }
   }, []);
 
+  // Warn user before closing or refreshing tab if there are unsaved local changes
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (hasUnsavedChanges) {
+        e.preventDefault();
+        e.returnValue = '';
+        return '';
+      }
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [hasUnsavedChanges]);
+
   // Centralized function to update tournament in state and persist to LocalStorage
   const updateTournamentState = (updated: Tournament, isFromCloud = false) => {
-    const sanitized = sanitizeTournamentData(updated);
+    const now = new Date().toISOString();
+    const sanitized = sanitizeTournamentData({
+      ...updated,
+      updatedAt: !isFromCloud ? now : (updated.updatedAt || now),
+      cloudSyncedAt: isFromCloud ? now : updated.cloudSyncedAt
+    });
     setTournament(sanitized);
     try {
       localStorage.setItem('paindo_active_tournament_v2', JSON.stringify(sanitized));
@@ -298,16 +316,22 @@ export default function App() {
       return;
     }
 
+    if (isSyncing === 'syncing') {
+      showToast('Proses penyimpanan sedang berjalan. Harap tunggu.', 'info');
+      return;
+    }
+
     setIsSyncing('syncing');
-    const success = await saveTournamentToSupabase(tournament);
-    if (success) {
+    const result = await saveTournamentToSupabase(tournament);
+    if (result.success) {
       setIsSyncing('synced');
       setHasUnsavedChanges(false);
+      updateTournamentState(tournament, true);
       refreshOnlineTournamentsList();
       showToast('Berhasil! Jadwal pertandingan, skor, & klasemen DISIMPAN ke Database Cloud.', 'success');
     } else {
       setIsSyncing('error');
-      const lastErr = (window as any).lastSupabaseError || 'Gagal menyimpan ke database cloud.';
+      const lastErr = ('error' in result && result.error.message) ? result.error.message : 'Gagal menyimpan ke database cloud.';
       showToast(`Gagal menyimpan: ${lastErr}`, 'error');
     }
   };
@@ -315,33 +339,41 @@ export default function App() {
   // Manual refresh from Cloud for users / spectators
   const handleRefreshFromCloud = async () => {
     if (!isSupabaseConfigured) return;
-    setIsSyncing('syncing');
-    
-    let refreshed: Tournament | null = null;
-    if (tournament && tournament.id && tournament.id !== '') {
-      refreshed = await loadTournamentFromSupabase(tournament.id);
-    }
-    if (!refreshed) {
-      refreshed = await getLatestTournamentFromSupabase();
-    }
 
-    if (refreshed) {
-      const localScore = getTournamentDataScore(tournament);
-      const cloudScore = getTournamentDataScore(refreshed);
-
-      if (localScore > cloudScore && hasUnsavedChanges) {
-        showToast('Data di browser Anda memiliki perubahan baru yang belum disimpan ke Cloud. Gunakan tombol "Simpan ke Cloud" terlebih dahulu.', 'info');
-        setIsSyncing('synced');
-        return;
+    const performFetch = async () => {
+      setIsSyncing('syncing');
+      
+      let refreshed: Tournament | null = null;
+      if (tournament && tournament.id && tournament.id !== '') {
+        refreshed = await loadTournamentFromSupabase(tournament.id);
+      }
+      if (!refreshed) {
+        refreshed = await getLatestTournamentFromSupabase();
       }
 
-      updateTournamentState(refreshed, true);
-      setIsSyncing('synced');
-      showToast('Data turnamen berhasil diperbarui dari Cloud!', 'success');
-    } else {
-      setIsSyncing('idle');
-      showToast('Tidak ada data terbaru dari Cloud.', 'info');
+      if (refreshed) {
+        updateTournamentState(refreshed, true);
+        setIsSyncing('synced');
+        showToast('Data turnamen berhasil diperbarui dari Cloud!', 'success');
+      } else {
+        setIsSyncing('idle');
+        showToast('Tidak ada data terbaru dari Cloud.', 'info');
+      }
+    };
+
+    if (hasUnsavedChanges) {
+      setShowConfirm({
+        title: 'Perubahan Lokal Belum Disimpan',
+        message: 'Anda memiliki perubahan data di browser yang belum disimpan ke Cloud. Apakah Anda yakin ingin memperbarui dari Cloud dan membuang perubahan lokal tersebut?',
+        onConfirm: () => {
+          setShowConfirm(null);
+          performFetch();
+        }
+      });
+      return;
     }
+
+    performFetch();
   };
 
   // Fetch online tournaments list when user is logged in
@@ -358,16 +390,18 @@ export default function App() {
     refreshOnlineTournamentsList();
   }, [user]);
 
-  // Auto-Sync tournament changes to Supabase Cloud ONLY if autoSyncEnabled is active
+  // Auto-Sync tournament changes to Supabase Cloud ONLY if autoSyncEnabled is active and not currently syncing
   useEffect(() => {
-    if (autoSyncEnabled && user && isSupabaseConfigured && tournament && tournament.id && tournament.id !== '' && tournament.name !== 'Belum Ada Turnamen' && hasUnsavedChanges) {
+    if (autoSyncEnabled && user && isSupabaseConfigured && tournament && tournament.id && tournament.id !== '' && tournament.name !== 'Belum Ada Turnamen' && hasUnsavedChanges && isSyncing !== 'syncing') {
       const performSync = async () => {
         setIsSyncing('syncing');
-        const success = await saveTournamentToSupabase(tournament);
-        if (success) {
+        const result = await saveTournamentToSupabase(tournament);
+        if (result.success) {
           setIsSyncing('synced');
           setHasUnsavedChanges(false);
+          updateTournamentState(tournament, true);
           setShowSyncSuccessMsg(true);
+          showToast('Data skor & susunan grup otomatis DIPUBLIKASI ke Cloud Web!', 'success');
           const timer = setTimeout(() => setShowSyncSuccessMsg(false), 2000);
           refreshOnlineTournamentsList();
           return () => clearTimeout(timer);
@@ -379,7 +413,7 @@ export default function App() {
       const timeoutId = setTimeout(performSync, 2000);
       return () => clearTimeout(timeoutId);
     }
-  }, [tournament, user, autoSyncEnabled, hasUnsavedChanges]);
+  }, [tournament, user, autoSyncEnabled, hasUnsavedChanges, isSyncing]);
 
   // Handler to update the entire tournament object
   const handleTournamentUpdate = (updatedTournament: Tournament) => {
@@ -409,14 +443,30 @@ export default function App() {
       return;
     }
 
-    setShowConfirm({
-      title: 'Konfirmasi Buat Turnamen Baru',
-      message: 'Apakah Anda yakin ingin membuat turnamen baru? Kredensial Admin Anda akan digunakan sebagai pemilik turnamen.',
-      onConfirm: () => {
-        setShowConfirm(null);
-        setIsCreateModalOpen(true);
-      }
-    });
+    const proceed = () => {
+      setShowConfirm({
+        title: 'Konfirmasi Buat Turnamen Baru',
+        message: 'Apakah Anda yakin ingin membuat turnamen baru? Kredensial Admin Anda akan digunakan sebagai pemilik turnamen.',
+        onConfirm: () => {
+          setShowConfirm(null);
+          setIsCreateModalOpen(true);
+        }
+      });
+    };
+
+    if (hasUnsavedChanges) {
+      setShowConfirm({
+        title: 'Perubahan Belum Disimpan',
+        message: 'Turnamen aktif memiliki perubahan yang belum disimpan ke Cloud. Yakin ingin membuat turnamen baru?',
+        onConfirm: () => {
+          setShowConfirm(null);
+          proceed();
+        }
+      });
+      return;
+    }
+
+    proceed();
   };
 
   // Handler for creating a new validated tournament from modal
@@ -472,31 +522,48 @@ export default function App() {
   // Load an online tournament from Supabase
   const handleLoadOnlineTournament = async (tId: string) => {
     if (!tId) return;
-    setIsSyncing('syncing');
-    const loaded = await loadTournamentFromSupabase(tId);
-    if (loaded) {
-      const localScore = getTournamentDataScore(tournament);
-      const cloudScore = getTournamentDataScore(loaded);
 
-      if (tournament.id === tId && localScore > cloudScore && hasUnsavedChanges) {
-        showToast('Turnamen lokal memiliki data lebih baru dibanding Cloud. Gunakan tombol "Simpan ke Cloud" untuk memperbarui data Cloud.', 'info');
+    const doLoad = async () => {
+      setIsSyncing('syncing');
+      const loaded = await loadTournamentFromSupabase(tId);
+      if (loaded) {
+        const localScore = getTournamentDataScore(tournament);
+        const cloudScore = getTournamentDataScore(loaded);
+
+        if (tournament.id === tId && localScore > cloudScore && hasUnsavedChanges) {
+          showToast('Turnamen lokal memiliki data lebih baru dibanding Cloud. Gunakan tombol "Simpan ke Cloud" untuk memperbarui data Cloud.', 'info');
+          setIsSyncing('synced');
+          return;
+        }
+
+        updateTournamentState(loaded, true);
         setIsSyncing('synced');
-        return;
-      }
-
-      updateTournamentState(loaded, true);
-      setIsSyncing('synced');
-      setSelectedMenu('dashboard');
-      if (loaded.activeDivisions && loaded.activeDivisions.length > 0) {
-        setSelectedDivisionId(loaded.activeDivisions[0].id);
+        setSelectedMenu('dashboard');
+        if (loaded.activeDivisions && loaded.activeDivisions.length > 0) {
+          setSelectedDivisionId(loaded.activeDivisions[0].id);
+        } else {
+          setSelectedDivisionId('');
+        }
+        showToast(`Berhasil memuat turnamen "${loaded.name}" dari Cloud!`, 'success');
       } else {
-        setSelectedDivisionId('');
+        setIsSyncing('error');
+        showToast('Gagal memuat data turnamen dari cloud. Periksa hak akses Anda.', 'error');
       }
-      showToast(`Berhasil memuat turnamen "${loaded.name}" dari Cloud!`, 'success');
-    } else {
-      setIsSyncing('error');
-      showToast('Gagal memuat data turnamen dari cloud. Periksa hak akses Anda.', 'error');
+    };
+
+    if (hasUnsavedChanges && tournament.id !== tId) {
+      setShowConfirm({
+        title: 'Perubahan Belum Disimpan',
+        message: 'Turnamen aktif memiliki perubahan lokal yang belum disimpan ke Cloud. Apakah Anda yakin ingin berpindah turnamen?',
+        onConfirm: () => {
+          setShowConfirm(null);
+          doLoad();
+        }
+      });
+      return;
     }
+
+    doLoad();
   };
 
   // Copy a clean short share link of the tournament to the clipboard
@@ -517,14 +584,17 @@ export default function App() {
       return;
     }
     setIsSyncing('syncing');
-    const success = await saveTournamentToSupabase(tournament);
-    if (success) {
+    const result = await saveTournamentToSupabase(tournament);
+    if (result.success) {
       setIsSyncing('synced');
+      setHasUnsavedChanges(false);
+      updateTournamentState(tournament, true);
       showToast('Migrasi Berhasil! Data lokal telah disimpan di database online Supabase.', 'success');
       refreshOnlineTournamentsList();
     } else {
       setIsSyncing('error');
-      showToast('Migrasi gagal. Silakan periksa koneksi internet Anda.', 'error');
+      const errDetail = ('error' in result && result.error.message) ? result.error.message : 'Gagal melakukan migrasi.';
+      showToast(`Migrasi gagal: ${errDetail}`, 'error');
     }
   };
 

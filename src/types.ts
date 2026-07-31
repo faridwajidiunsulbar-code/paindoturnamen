@@ -100,7 +100,23 @@ export interface Tournament {
   ageGroups: AgeGroup[];
   activeDivisions: Division[];
   ownerId?: string;
+  updatedAt?: string;
+  cloudSyncedAt?: string;
 }
+
+export type ServiceResult<T> =
+  | {
+      success: true;
+      data: T;
+    }
+  | {
+      success: false;
+      error: {
+        code?: string;
+        message: string;
+        details?: string;
+      };
+    };
 
 export interface GroupStandingRow {
   entryId: string;
