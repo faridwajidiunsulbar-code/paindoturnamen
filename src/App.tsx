@@ -615,59 +615,97 @@ export default function App() {
 
   // Delete current tournament from Supabase and local state safely
   const handleDeleteCurrentTournament = async () => {
-    if (!user) return;
+    if (!user) {
+      setIsAuthModalOpen(true);
+      showToast('Akses Ditolak: Anda harus login ke Akun Cloud untuk menghapus turnamen.', 'error');
+      return;
+    }
+
+    if (isSyncing === 'syncing') {
+      showToast('Proses penghapusan sedang berjalan. Harap tunggu.', 'info');
+      return;
+    }
     
     setShowConfirm({
       title: 'Hapus Turnamen Permanen',
       message: `Apakah Anda yakin ingin menghapus turnamen "${tournament.name}" ini dari cloud secara permanen? Semua data pendaftaran, grup, skor, dan pertandingan di dalamnya akan dihapus selamanya. Tindakan ini tidak dapat dibatalkan.`,
       onConfirm: async () => {
         setIsSyncing('syncing');
-        const deletedId = tournament.id;
-        const success = await deleteTournamentFromSupabase(deletedId);
         setShowConfirm(null);
+        const deletedId = tournament.id;
+        const result = await deleteTournamentFromSupabase(deletedId);
         
-        if (success) {
-          // Refresh list of remaining user tournaments
-          const remainingList = await listUserTournaments();
-          setOnlineTournaments(remainingList);
+        if ('error' in result) {
+          // Cloud deletion failed! Maintain local active tournament & LocalStorage untouched
+          setIsSyncing('error');
+          const err = result.error;
+          const errorMsg = `Gagal Menghapus Turnamen [Modul: ${err.module || 'tournament'} | Ops: ${err.operation || 'delete'}]: ${err.message}${err.details ? ` (${err.details})` : ''}`;
+          showToast(errorMsg, 'error');
+          return;
+        }
 
-          if (remainingList && remainingList.length > 0) {
-            // Automatically switch to the most recent remaining tournament
-            const latestRemainingId = remainingList[0].id;
-            const loaded = await loadTournamentFromSupabase(latestRemainingId);
-            if (loaded) {
-              setTournament(loaded);
-              setIsSyncing('synced');
-              setSelectedMenu('dashboard');
-              if (loaded.activeDivisions && loaded.activeDivisions.length > 0) {
-                setSelectedDivisionId(loaded.activeDivisions[0].id);
-              } else {
-                setSelectedDivisionId('');
-              }
-              showToast(`Turnamen berhasil dihapus dari cloud. Menampilkan turnamen tersisa: "${loaded.name}"`, 'success');
-            } else {
-              setIsSyncing('idle');
+        // Cloud deletion confirmed! Clear local storage cache for deleted tournament
+        try {
+          const activeRaw = localStorage.getItem('paindo_active_tournament_v2');
+          if (activeRaw) {
+            const activeObj = JSON.parse(activeRaw);
+            if (activeObj.id === deletedId) {
+              localStorage.removeItem('paindo_active_tournament_v2');
+              localStorage.removeItem('paindo_active_tournament_backup');
             }
+          }
+        } catch (e) {
+          console.warn('Gagal membersihkan cache LocalStorage setelah delete:', e);
+        }
+
+        // Refresh list of remaining user tournaments
+        const remainingList = await listUserTournaments();
+        setOnlineTournaments(remainingList);
+
+        if (remainingList && remainingList.length > 0) {
+          // Automatically switch to the most recent remaining tournament
+          const latestRemainingId = remainingList[0].id;
+          const loaded = await loadTournamentFromSupabase(latestRemainingId);
+          if (loaded) {
+            updateTournamentState(loaded, true);
+            setIsSyncing('synced');
+            setSelectedMenu('dashboard');
+            if (loaded.activeDivisions && loaded.activeDivisions.length > 0) {
+              setSelectedDivisionId(loaded.activeDivisions[0].id);
+            } else {
+              setSelectedDivisionId('');
+            }
+            showToast(`Turnamen berhasil dihapus dari cloud. Menampilkan turnamen tersisa: "${loaded.name}"`, 'success');
           } else {
-            // No remaining tournaments left in cloud! Reset to empty state without auto-generating dummy
-            const emptyTemplate: Tournament = {
-              id: '',
-              name: 'Belum Ada Turnamen',
-              date: new Date().toISOString().split('T')[0],
-              location: '',
-              events: [],
-              ageGroups: [],
-              activeDivisions: []
-            };
-            setTournament(emptyTemplate);
             setIsSyncing('idle');
-            setSelectedMenu('config');
-            setSelectedDivisionId('');
-            showToast('Turnamen berhasil dihapus dari cloud. Tidak ada turnamen tersisa.', 'info');
           }
         } else {
-          setIsSyncing('error');
-          showToast('Gagal menghapus turnamen dari cloud.', 'error');
+          // No remaining tournaments left in cloud! Reset active tournament state & LocalStorage
+          localStorage.removeItem('paindo_active_tournament_v2');
+          localStorage.removeItem('paindo_active_tournament_backup');
+
+          try {
+            const currentUrl = new URL(window.location.href);
+            currentUrl.searchParams.delete('t');
+            currentUrl.searchParams.delete('id');
+            window.history.replaceState({}, '', currentUrl.toString());
+          } catch (e) {}
+
+          const emptyTemplate: Tournament = {
+            id: '',
+            name: 'Belum Ada Turnamen',
+            date: new Date().toISOString().split('T')[0],
+            location: '',
+            events: [],
+            ageGroups: [],
+            activeDivisions: []
+          };
+          setTournament(emptyTemplate);
+          setHasUnsavedChanges(false);
+          setIsSyncing('idle');
+          setSelectedMenu('config');
+          setSelectedDivisionId('');
+          showToast('Turnamen berhasil dihapus dari cloud. Tidak ada turnamen tersisa.', 'info');
         }
       }
     });
@@ -817,11 +855,12 @@ export default function App() {
               {user && (onlineTournaments.some(t => t.id === tournament.id) || tournament.id.startsWith('t-')) && (
                 <button
                   onClick={handleDeleteCurrentTournament}
-                  className="w-full py-1.5 bg-rose-600/15 hover:bg-rose-600/25 text-rose-400 hover:text-rose-300 border border-rose-500/20 rounded-lg text-[10px] font-black uppercase tracking-wider transition flex items-center justify-center gap-1.5"
+                  disabled={isSyncing === 'syncing'}
+                  className="w-full py-1.5 bg-rose-600/15 hover:bg-rose-600/25 text-rose-400 hover:text-rose-300 border border-rose-500/20 rounded-lg text-[10px] font-black uppercase tracking-wider transition flex items-center justify-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
                   id="sidebar-delete-btn"
                 >
                   <Trash2 className="h-3 w-3" />
-                  <span>Hapus Turnamen dari Cloud</span>
+                  <span>{isSyncing === 'syncing' ? 'Menghapus Turnamen...' : 'Hapus Turnamen dari Cloud'}</span>
                 </button>
               )}
 

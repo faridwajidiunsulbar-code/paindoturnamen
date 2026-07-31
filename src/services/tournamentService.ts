@@ -397,25 +397,292 @@ export async function listUserTournaments(): Promise<{ id: string; name: string;
   }
 }
 
-// Delete tournament from Supabase
-export async function deleteTournamentFromSupabase(tournamentId: string): Promise<boolean> {
-  if (!isSupabaseConfigured) return false;
+// Delete tournament from Supabase with full relational cleanup and detailed ServiceResult reporting
+export async function deleteTournamentFromSupabase(tournamentId: string): Promise<ServiceResult<boolean>> {
+  if (!isSupabaseConfigured) {
+    return {
+      success: false,
+      error: {
+        module: 'tournament',
+        operation: 'delete',
+        message: 'Database Cloud belum terkonfigurasi.',
+        details: 'isSupabaseConfigured is false'
+      }
+    };
+  }
+
+  if (!tournamentId || !tournamentId.trim()) {
+    return {
+      success: false,
+      error: {
+        module: 'tournament',
+        operation: 'delete',
+        message: 'ID Turnamen tidak valid.',
+        details: 'tournamentId parameter is empty'
+      }
+    };
+  }
 
   try {
-    const { error } = await supabase
-      .from('tournaments')
-      .delete()
-      .eq('tournament_id', tournamentId) || await supabase.from('tournaments').delete().eq('id', tournamentId);
-
-    if (error) {
-      console.error('Error deleting tournament from Supabase:', error);
-      return false;
+    const user = await getCurrentUser();
+    if (!user) {
+      return {
+        success: false,
+        error: {
+          module: 'tournament',
+          operation: 'delete',
+          message: 'Akses ditolak: Anda harus login ke Akun Cloud untuk menghapus turnamen.',
+          details: 'No active user session found'
+        }
+      };
     }
 
-    return true;
-  } catch (err) {
+    // 1. Check if tournament exists and verify ownership
+    const { data: existingTourney, error: fetchErr } = await supabase
+      .from('tournaments')
+      .select('id, owner_id, name')
+      .eq('id', tournamentId)
+      .maybeSingle();
+
+    if (fetchErr) {
+      return {
+        success: false,
+        error: {
+          module: 'tournament',
+          operation: 'fetch_before_delete',
+          message: `Gagal memeriksa turnamen: ${fetchErr.message}`,
+          details: JSON.stringify(fetchErr),
+          code: fetchErr.code
+        }
+      };
+    }
+
+    if (!existingTourney) {
+      return {
+        success: false,
+        error: {
+          module: 'tournament',
+          operation: 'delete',
+          message: `Turnamen tidak ditemukan di Cloud Database (ID: ${tournamentId}).`,
+          details: 'Tournament record does not exist in tournaments table'
+        }
+      };
+    }
+
+    if (existingTourney.owner_id && existingTourney.owner_id !== user.id) {
+      return {
+        success: false,
+        error: {
+          module: 'tournament',
+          operation: 'delete_authorization',
+          message: `Akses ditolak: Turnamen "${existingTourney.name}" dimiliki oleh pengguna lain.`,
+          details: `Current user ID (${user.id}) does not match tournament owner ID (${existingTourney.owner_id}).`
+        }
+      };
+    }
+
+    // 2. Explicitly delete child relational tables in reverse dependency order
+    // a. Champions
+    const { error: champErr } = await supabase
+      .from('champions')
+      .delete()
+      .eq('tournament_id', tournamentId);
+    if (champErr) {
+      return {
+        success: false,
+        error: {
+          module: 'knockout',
+          operation: 'delete_champions',
+          message: `Gagal menghapus data juara: ${champErr.message}`,
+          details: JSON.stringify(champErr),
+          code: champErr.code
+        }
+      };
+    }
+
+    // b. Knockout Slots
+    const { error: slotErr } = await supabase
+      .from('knockout_slots')
+      .delete()
+      .eq('tournament_id', tournamentId);
+    if (slotErr) {
+      return {
+        success: false,
+        error: {
+          module: 'knockout',
+          operation: 'delete_knockout_slots',
+          message: `Gagal menghapus bagan knockout: ${slotErr.message}`,
+          details: JSON.stringify(slotErr),
+          code: slotErr.code
+        }
+      };
+    }
+
+    // c. Matches
+    const { error: matchErr } = await supabase
+      .from('matches')
+      .delete()
+      .eq('tournament_id', tournamentId);
+    if (matchErr) {
+      return {
+        success: false,
+        error: {
+          module: 'match',
+          operation: 'delete_matches',
+          message: `Gagal menghapus data pertandingan: ${matchErr.message}`,
+          details: JSON.stringify(matchErr),
+          code: matchErr.code
+        }
+      };
+    }
+
+    // d. Group Members (members of division_groups for this tournament)
+    const { data: groupRows } = await supabase
+      .from('division_groups')
+      .select('id')
+      .eq('tournament_id', tournamentId);
+
+    if (groupRows && groupRows.length > 0) {
+      const groupIds = groupRows.map(g => g.id);
+      const { error: gmErr } = await supabase
+        .from('group_members')
+        .delete()
+        .in('group_id', groupIds);
+      if (gmErr) {
+        return {
+          success: false,
+          error: {
+            module: 'group',
+            operation: 'delete_group_members',
+            message: `Gagal menghapus anggota pool/grup: ${gmErr.message}`,
+            details: JSON.stringify(gmErr),
+            code: gmErr.code
+          }
+        };
+      }
+    }
+
+    // e. Division Groups
+    const { error: groupErr } = await supabase
+      .from('division_groups')
+      .delete()
+      .eq('tournament_id', tournamentId);
+    if (groupErr) {
+      return {
+        success: false,
+        error: {
+          module: 'group',
+          operation: 'delete_division_groups',
+          message: `Gagal menghapus data pool/grup: ${groupErr.message}`,
+          details: JSON.stringify(groupErr),
+          code: groupErr.code
+        }
+      };
+    }
+
+    // f. Entries (Peserta)
+    const { error: entryErr } = await supabase
+      .from('entries')
+      .delete()
+      .eq('tournament_id', tournamentId);
+    if (entryErr) {
+      return {
+        success: false,
+        error: {
+          module: 'entry',
+          operation: 'delete_entries',
+          message: `Gagal menghapus data peserta: ${entryErr.message}`,
+          details: JSON.stringify(entryErr),
+          code: entryErr.code
+        }
+      };
+    }
+
+    // g. Divisions
+    const { error: divErr } = await supabase
+      .from('divisions')
+      .delete()
+      .eq('tournament_id', tournamentId);
+    if (divErr) {
+      return {
+        success: false,
+        error: {
+          module: 'division',
+          operation: 'delete_divisions',
+          message: `Gagal menghapus data divisi: ${divErr.message}`,
+          details: JSON.stringify(divErr),
+          code: divErr.code
+        }
+      };
+    }
+
+    // h. Match Types (Nomor Pertandingan)
+    const { error: mtErr } = await supabase
+      .from('match_types')
+      .delete()
+      .eq('tournament_id', tournamentId);
+    if (mtErr) {
+      return {
+        success: false,
+        error: {
+          module: 'division',
+          operation: 'delete_match_types',
+          message: `Gagal menghapus nomor pertandingan: ${mtErr.message}`,
+          details: JSON.stringify(mtErr),
+          code: mtErr.code
+        }
+      };
+    }
+
+    // i. Age Groups (Kelompok Umur)
+    const { error: agErr } = await supabase
+      .from('age_groups')
+      .delete()
+      .eq('tournament_id', tournamentId);
+    if (agErr) {
+      return {
+        success: false,
+        error: {
+          module: 'division',
+          operation: 'delete_age_groups',
+          message: `Gagal menghapus kelompok umur: ${agErr.message}`,
+          details: JSON.stringify(agErr),
+          code: agErr.code
+        }
+      };
+    }
+
+    // j. Delete Parent Tournament row using correct primary key column 'id'
+    const { error: tourneyErr } = await supabase
+      .from('tournaments')
+      .delete()
+      .eq('id', tournamentId);
+
+    if (tourneyErr) {
+      return {
+        success: false,
+        error: {
+          module: 'tournament',
+          operation: 'delete_tournament_row',
+          message: `Gagal menghapus induk turnamen dari Cloud: ${tourneyErr.message}`,
+          details: JSON.stringify(tourneyErr),
+          code: tourneyErr.code
+        }
+      };
+    }
+
+    return { success: true, data: true };
+  } catch (err: any) {
     console.error('Error in deleteTournamentFromSupabase:', err);
-    return false;
+    return {
+      success: false,
+      error: {
+        module: 'tournament',
+        operation: 'delete',
+        message: err?.message || 'Terjadi kesalahan internal saat menghapus turnamen dari cloud.',
+        details: JSON.stringify(err)
+      }
+    };
   }
 }
 
