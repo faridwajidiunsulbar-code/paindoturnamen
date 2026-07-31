@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import * as XLSX from 'xlsx';
-import { FileSpreadsheet, Upload, FileText, Check, AlertCircle, X, Download, Copy, RefreshCw, Plus } from 'lucide-react';
+import { FileSpreadsheet, Upload, FileText, Check, AlertCircle, X, Download, Copy, RefreshCw, Plus, CheckCircle, XCircle } from 'lucide-react';
 import { Entry } from '../types';
+import { normalizeName, cleanDisplayName } from '../services/entryService';
 
 interface ExcelImportModalProps {
   isOpen: boolean;
@@ -9,6 +10,15 @@ interface ExcelImportModalProps {
   divisionName: string;
   onClose: () => void;
   onImport: (entries: Entry[], mode: 'append' | 'replace') => void;
+}
+
+export interface ImportRowReport {
+  rowNum: number;
+  name1: string;
+  name2?: string;
+  affiliation?: string;
+  status: 'valid' | 'invalid';
+  reason?: string;
 }
 
 export default function ExcelImportModal({
@@ -21,6 +31,7 @@ export default function ExcelImportModal({
   const [activeTab, setActiveTab] = useState<'upload' | 'paste'>('upload');
   const [pastedText, setPastedText] = useState('');
   const [parsedEntries, setParsedEntries] = useState<Entry[]>([]);
+  const [rowReports, setRowReports] = useState<ImportRowReport[]>([]);
   const [importMode, setImportMode] = useState<'append' | 'replace'>('append');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [fileName, setFileName] = useState<string | null>(null);
@@ -32,24 +43,28 @@ export default function ExcelImportModal({
 
   if (!isOpen) return null;
 
-  // Helper to process row arrays / objects into Entry list
+  // Helper to process row arrays / objects into Entry list with per-row validation report
   const processRawRows = (rows: any[]) => {
     if (!rows || rows.length === 0) {
       setErrorMessage('Tabel/File kosong atau tidak memiliki data yang dapat dibaca.');
       setParsedEntries([]);
+      setRowReports([]);
       return;
     }
 
     const timestamp = Date.now();
-    const result: Entry[] = [];
+    const validEntries: Entry[] = [];
+    const reports: ImportRowReport[] = [];
+    const seenPlayersInImport = new Set<string>();
+    const seenPairsInImport = new Set<string>();
 
     rows.forEach((row, idx) => {
+      const rowNum = idx + 1;
       let n1 = '';
       let n2 = '';
       let aff = '';
 
       if (Array.isArray(row)) {
-        // Row is an array of cells [Cell0, Cell1, Cell2]
         if (row.length === 0) return;
         
         // Skip header if first row has header keywords
@@ -61,7 +76,6 @@ export default function ExcelImportModal({
           return;
         }
 
-        // If row[0] is number/No., offset index
         let startIdx = 0;
         if (!isNaN(Number(row[0])) && row.length > 1) {
           startIdx = 1;
@@ -75,10 +89,8 @@ export default function ExcelImportModal({
           aff = String(row[startIdx + 1] || '').trim();
         }
       } else if (typeof row === 'object' && row !== null) {
-        // Row is an object mapped by column keys
         const keys = Object.keys(row);
         
-        // Find keys by fuzzy match
         const k1 = keys.find(k => /pemain\s*1|nama\s*1|player\s*1|nama\s*lengkap|nama/i.test(k));
         const k2 = keys.find(k => /pemain\s*2|nama\s*2|player\s*2|pasangan|partner/i.test(k));
         const kAff = keys.find(k => /klub|afiliasi|kota|tim|daerah/i.test(k));
@@ -95,23 +107,126 @@ export default function ExcelImportModal({
         else if (keys[isDouble ? 2 : 1]) aff = String(row[keys[isDouble ? 2 : 1]] || '').trim();
       }
 
-      // Validate player names
-      if (n1 && (!isDouble || n2)) {
-        result.push({
-          id: `ent-imp-${idx}-${timestamp}`,
-          name1: n1,
-          name2: isDouble ? n2 : undefined,
-          affiliation: aff || undefined
-        });
+      // Check row validity
+      const cleanedN1 = cleanDisplayName(n1);
+      const cleanedN2 = cleanDisplayName(n2);
+      const norm1 = normalizeName(n1);
+      const norm2 = normalizeName(n2);
+
+      if (!norm1 && (!isDouble || !norm2)) {
+        // Empty row, skip silently
+        return;
       }
+
+      if (!norm1) {
+        reports.push({
+          rowNum,
+          name1: cleanedN1 || '-',
+          name2: isDouble ? cleanedN2 || '-' : undefined,
+          affiliation: aff || undefined,
+          status: 'invalid',
+          reason: 'Nama Pemain 1 kosong'
+        });
+        return;
+      }
+
+      if (isDouble) {
+        if (!norm2) {
+          reports.push({
+            rowNum,
+            name1: cleanedN1,
+            name2: '-',
+            affiliation: aff || undefined,
+            status: 'invalid',
+            reason: 'Nama Pemain 2 kosong'
+          });
+          return;
+        }
+
+        if (norm1 === norm2) {
+          reports.push({
+            rowNum,
+            name1: cleanedN1,
+            name2: cleanedN2,
+            affiliation: aff || undefined,
+            status: 'invalid',
+            reason: 'Pemain 1 dan Pemain 2 tidak boleh orang yang sama'
+          });
+          return;
+        }
+
+        // Symmetric Pair check in current import file
+        const pairKey1 = `${norm1}|${norm2}`;
+        const pairKey2 = `${norm2}|${norm1}`;
+        if (seenPairsInImport.has(pairKey1) || seenPairsInImport.has(pairKey2)) {
+          reports.push({
+            rowNum,
+            name1: cleanedN1,
+            name2: cleanedN2,
+            affiliation: aff || undefined,
+            status: 'invalid',
+            reason: 'Pasangan duplikat/terbalik dalam file impor'
+          });
+          return;
+        }
+
+        // Check if player is already assigned in another row in this file
+        if (seenPlayersInImport.has(norm1) || seenPlayersInImport.has(norm2)) {
+          const dupPlayer = seenPlayersInImport.has(norm1) ? cleanedN1 : cleanedN2;
+          reports.push({
+            rowNum,
+            name1: cleanedN1,
+            name2: cleanedN2,
+            affiliation: aff || undefined,
+            status: 'invalid',
+            reason: `Pemain [${dupPlayer}] sudah muncul di baris lain dalam file ini`
+          });
+          return;
+        }
+
+        seenPairsInImport.add(pairKey1);
+        seenPlayersInImport.add(norm1);
+        seenPlayersInImport.add(norm2);
+      } else {
+        // Single
+        if (seenPlayersInImport.has(norm1)) {
+          reports.push({
+            rowNum,
+            name1: cleanedN1,
+            affiliation: aff || undefined,
+            status: 'invalid',
+            reason: `Pemain [${cleanedN1}] duplikat dalam file ini`
+          });
+          return;
+        }
+        seenPlayersInImport.add(norm1);
+      }
+
+      // Valid entry row!
+      validEntries.push({
+        id: `ent-imp-${idx}-${timestamp}`,
+        name1: cleanedN1,
+        name2: isDouble ? cleanedN2 : undefined,
+        affiliation: aff ? cleanDisplayName(aff) : undefined
+      });
+
+      reports.push({
+        rowNum,
+        name1: cleanedN1,
+        name2: isDouble ? cleanedN2 : undefined,
+        affiliation: aff || undefined,
+        status: 'valid'
+      });
     });
 
-    if (result.length === 0) {
-      setErrorMessage('Tidak ditemukan baris yang memenuhi kriteria nama pemain.');
+    setRowReports(reports);
+
+    if (validEntries.length === 0) {
+      setErrorMessage('Tidak ditemukan baris yang memenuhi kriteria pendaftaran valid.');
       setParsedEntries([]);
     } else {
       setErrorMessage(null);
-      setParsedEntries(result);
+      setParsedEntries(validEntries);
     }
   };
 
@@ -352,36 +467,59 @@ export default function ExcelImportModal({
             </div>
           )}
 
-          {/* Parsed Preview Table */}
-          {parsedEntries.length > 0 && (
+          {/* Parsed Preview & Report Table */}
+          {rowReports.length > 0 && (
             <div className="space-y-3 pt-2">
               <div className="flex items-center justify-between">
                 <span className="text-xs font-extrabold text-navy flex items-center gap-1.5">
                   <Check className="h-4 w-4 text-emerald-600" />
-                  Pratinjau Data Terdeteksi ({parsedEntries.length} {isDouble ? 'Pasang' : 'Peserta'})
+                  Laporan Hasil Analisis Impor ({parsedEntries.length} Valid / {rowReports.filter(r => r.status === 'invalid').length} Ditolak)
                 </span>
-                <span className="text-[11px] text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded font-bold border border-emerald-200">
-                  Siap Diimpor
-                </span>
+                <div className="flex gap-2 text-[11px]">
+                  <span className="text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded font-bold border border-emerald-200 flex items-center gap-1">
+                    <CheckCircle className="h-3 w-3 text-emerald-600" /> {parsedEntries.length} Berhasil
+                  </span>
+                  {rowReports.some(r => r.status === 'invalid') && (
+                    <span className="text-rose-700 bg-rose-50 px-2 py-0.5 rounded font-bold border border-rose-200 flex items-center gap-1">
+                      <XCircle className="h-3 w-3 text-rose-600" /> {rowReports.filter(r => r.status === 'invalid').length} Ditolak
+                    </span>
+                  )}
+                </div>
               </div>
 
-              <div className="max-h-48 overflow-y-auto border border-slate-200 rounded-xl">
+              <div className="max-h-52 overflow-y-auto border border-slate-200 rounded-xl">
                 <table className="w-full text-left text-xs border-collapse">
                   <thead>
                     <tr className="bg-slate-100 border-b border-slate-200 font-bold text-slate-600">
-                      <th className="p-2 w-10 text-center">No</th>
+                      <th className="p-2 w-10 text-center">Baris</th>
                       <th className="p-2">{isDouble ? 'Pemain 1' : 'Nama Pemain'}</th>
                       {isDouble && <th className="p-2">Pemain 2</th>}
                       <th className="p-2">Klub/Afiliasi</th>
+                      <th className="p-2 w-28 text-center">Status</th>
+                      <th className="p-2">Keterangan / Alasan</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-150">
-                    {parsedEntries.map((ent, idx) => (
-                      <tr key={ent.id} className="hover:bg-slate-50">
-                        <td className="p-2 text-center text-slate-400 font-mono">{idx + 1}</td>
-                        <td className="p-2 font-bold text-slate-800">{ent.name1}</td>
-                        {isDouble && <td className="p-2 font-bold text-slate-800">{ent.name2 || '-'}</td>}
-                        <td className="p-2 text-slate-500">{ent.affiliation || '-'}</td>
+                    {rowReports.map((rep) => (
+                      <tr key={rep.rowNum} className={rep.status === 'valid' ? 'hover:bg-slate-50' : 'bg-rose-50/40 hover:bg-rose-50/70'}>
+                        <td className="p-2 text-center text-slate-400 font-mono">{rep.rowNum}</td>
+                        <td className="p-2 font-bold text-slate-800">{rep.name1}</td>
+                        {isDouble && <td className="p-2 font-bold text-slate-800">{rep.name2 || '-'}</td>}
+                        <td className="p-2 text-slate-500">{rep.affiliation || '-'}</td>
+                        <td className="p-2 text-center">
+                          {rep.status === 'valid' ? (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-emerald-100 text-emerald-800 font-bold text-[10px] rounded-full">
+                              <CheckCircle className="h-3 w-3 text-emerald-600" /> Valid
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-rose-100 text-rose-800 font-bold text-[10px] rounded-full">
+                              <XCircle className="h-3 w-3 text-rose-600" /> Ditolak
+                            </span>
+                          )}
+                        </td>
+                        <td className="p-2 text-[11px] text-slate-600 font-medium">
+                          {rep.status === 'valid' ? 'Siap diimpor' : rep.reason}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -389,39 +527,41 @@ export default function ExcelImportModal({
               </div>
 
               {/* Import Mode Selection */}
-              <div className="p-3 bg-slate-50 rounded-xl border border-slate-150 space-y-2">
-                <label className="text-xs font-extrabold text-slate-700 block">Metode Impor:</label>
-                <div className="flex flex-col sm:flex-row gap-2 text-xs">
-                  <label className="flex items-center gap-2 cursor-pointer bg-white p-2.5 rounded-lg border border-slate-200 flex-1">
-                    <input
-                      type="radio"
-                      name="importMode"
-                      value="append"
-                      checked={importMode === 'append'}
-                      onChange={() => setImportMode('append')}
-                      className="text-emerald-600 focus:ring-emerald-500"
-                    />
-                    <div>
-                      <span className="font-bold text-slate-800 block">Tambahkan (Append)</span>
-                      <span className="text-[10px] text-slate-400">Gabungkan dengan peserta yang sudah ada saat ini</span>
-                    </div>
-                  </label>
-                  <label className="flex items-center gap-2 cursor-pointer bg-white p-2.5 rounded-lg border border-slate-200 flex-1">
-                    <input
-                      type="radio"
-                      name="importMode"
-                      value="replace"
-                      checked={importMode === 'replace'}
-                      onChange={() => setImportMode('replace')}
-                      className="text-emerald-600 focus:ring-emerald-500"
-                    />
-                    <div>
-                      <span className="font-bold text-rose-700 block">Ganti Semua (Replace)</span>
-                      <span className="text-[10px] text-slate-400">Hapus daftar peserta lama & timpa dengan data baru ini</span>
-                    </div>
-                  </label>
+              {parsedEntries.length > 0 && (
+                <div className="p-3 bg-slate-50 rounded-xl border border-slate-150 space-y-2">
+                  <label className="text-xs font-extrabold text-slate-700 block">Metode Impor:</label>
+                  <div className="flex flex-col sm:flex-row gap-2 text-xs">
+                    <label className="flex items-center gap-2 cursor-pointer bg-white p-2.5 rounded-lg border border-slate-200 flex-1">
+                      <input
+                        type="radio"
+                        name="importMode"
+                        value="append"
+                        checked={importMode === 'append'}
+                        onChange={() => setImportMode('append')}
+                        className="text-emerald-600 focus:ring-emerald-500"
+                      />
+                      <div>
+                        <span className="font-bold text-slate-800 block">Tambahkan (Append)</span>
+                        <span className="text-[10px] text-slate-400">Gabungkan baris valid dengan peserta yang sudah ada saat ini</span>
+                      </div>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer bg-white p-2.5 rounded-lg border border-slate-200 flex-1">
+                      <input
+                        type="radio"
+                        name="importMode"
+                        value="replace"
+                        checked={importMode === 'replace'}
+                        onChange={() => setImportMode('replace')}
+                        className="text-emerald-600 focus:ring-emerald-500"
+                      />
+                      <div>
+                        <span className="font-bold text-rose-700 block">Ganti Semua (Replace)</span>
+                        <span className="text-[10px] text-slate-400">Hapus daftar peserta lama & timpa dengan baris valid baru ini</span>
+                      </div>
+                    </label>
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
           )}
         </div>

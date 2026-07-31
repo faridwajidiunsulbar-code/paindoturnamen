@@ -9,6 +9,204 @@ export const cleanEntryId = (id: string | null | undefined): string | null => {
   return id;
 };
 
+// Name normalization & string utilities
+export function normalizeName(name: string | null | undefined): string {
+  if (!name) return '';
+  return name.trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+export function cleanDisplayName(name: string | null | undefined): string {
+  if (!name) return '';
+  return name.trim().replace(/\s+/g, ' ');
+}
+
+export function isSameNormalizedName(nameA: string, nameB: string): boolean {
+  return normalizeName(nameA) === normalizeName(nameB);
+}
+
+// Inspect relation impact of deleting or changing an entry
+export interface EntryRelationInspection {
+  inGroup: boolean;
+  groupName?: string;
+  hasScores: boolean;
+  inKnockout: boolean;
+  inChampions: boolean;
+  canDelete: boolean;
+  canEditPerson: boolean;
+  reason?: string;
+}
+
+export function inspectEntryRelations(division: {
+  groups: Array<{ name: string; entryIds: string[] }>;
+  roundRobinMatches: Array<{ entryId1: string | null; entryId2: string | null; status: string; score1: number | null; score2: number | null }>;
+  knockoutStage: { matches: Array<{ entryId1: string | null; entryId2: string | null; status: string; score1: number | null; score2: number | null; winnerId?: string | null }>; confirmedEntryIds: string[] } | null;
+  champions: { firstPlaceEntryId: string | null; secondPlaceEntryId: string | null; thirdPlaceEntryId: string | null } | null;
+}, entryId: string): EntryRelationInspection {
+  const result: EntryRelationInspection = {
+    inGroup: false,
+    hasScores: false,
+    inKnockout: false,
+    inChampions: false,
+    canDelete: true,
+    canEditPerson: true
+  };
+
+  if (!entryId) return result;
+
+  // 1. Group membership
+  const group = division.groups?.find(g => g.entryIds?.includes(entryId));
+  if (group) {
+    result.inGroup = true;
+    result.groupName = group.name;
+  }
+
+  // 2. Round Robin matches & scores
+  if (division.roundRobinMatches) {
+    for (const m of division.roundRobinMatches) {
+      if (m.entryId1 === entryId || m.entryId2 === entryId) {
+        if (m.status === 'selesai' || m.status === 'walkover' || (m.score1 !== null && m.score1 > 0) || (m.score2 !== null && m.score2 > 0)) {
+          result.hasScores = true;
+          break;
+        }
+      }
+    }
+  }
+
+  // 3. Knockout stage
+  if (division.knockoutStage) {
+    if (division.knockoutStage.confirmedEntryIds?.includes(entryId)) {
+      result.inKnockout = true;
+    }
+    if (division.knockoutStage.matches) {
+      for (const m of division.knockoutStage.matches) {
+        if (m.entryId1 === entryId || m.entryId2 === entryId) {
+          result.inKnockout = true;
+          if (m.status === 'selesai' || m.status === 'walkover' || m.score1 !== null || m.score2 !== null || m.winnerId === entryId) {
+            result.hasScores = true;
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  // 4. Champions podium
+  if (division.champions) {
+    if (division.champions.firstPlaceEntryId === entryId || division.champions.secondPlaceEntryId === entryId || division.champions.thirdPlaceEntryId === entryId) {
+      result.inChampions = true;
+    }
+  }
+
+  // Determine permissions
+  if (result.hasScores || result.inKnockout || result.inChampions) {
+    result.canDelete = false;
+    result.canEditPerson = false;
+    if (result.inChampions) {
+      result.reason = 'Peserta sudah masuk dalam podium Juara.';
+    } else if (result.inKnockout) {
+      result.reason = 'Peserta sudah masuk dalam bagan Knockout.';
+    } else {
+      result.reason = 'Peserta sudah memiliki skor/hasil pertandingan.';
+    }
+  } else if (result.inGroup) {
+    result.canDelete = true;
+    result.canEditPerson = true;
+    result.reason = `Peserta sudah masuk dalam ${result.groupName || 'grup'}.`;
+  }
+
+  return result;
+}
+
+// Entry validation result
+export interface EntryValidationResult {
+  valid: boolean;
+  error?: string;
+  sameNameConflict?: {
+    playerName: string;
+    existingEntry: Entry;
+  };
+}
+
+export function validateEntryInput(
+  isDouble: boolean,
+  name1: string,
+  name2: string | undefined,
+  existingEntries: Entry[],
+  excludeEntryId?: string
+): EntryValidationResult {
+  const norm1 = normalizeName(name1);
+  const norm2 = normalizeName(name2 || '');
+
+  if (!norm1) {
+    return { valid: false, error: 'Nama Pemain 1 wajib diisi.' };
+  }
+
+  if (isDouble) {
+    if (!norm2) {
+      return { valid: false, error: 'Nama Pemain 2 (Partner) wajib diisi untuk kategori Ganda.' };
+    }
+    if (norm1 === norm2) {
+      return { valid: false, error: 'Pemain 1 dan Pemain 2 tidak boleh merupakan orang yang sama.' };
+    }
+  }
+
+  const entriesToCheck = existingEntries.filter(e => !excludeEntryId || e.id !== excludeEntryId);
+
+  // Check for duplicate / registered players
+  for (const ent of entriesToCheck) {
+    const eNorm1 = normalizeName(ent.name1);
+    const eNorm2 = normalizeName(ent.name2 || '');
+
+    if (isDouble) {
+      // 1. Check exact symmetric pair (A-B vs A-B or B-A)
+      const isExactPair = (norm1 === eNorm1 && norm2 === eNorm2) || (norm1 === eNorm2 && norm2 === eNorm1);
+      if (isExactPair) {
+        return {
+          valid: false,
+          error: `Pasangan [${cleanDisplayName(name1)} / ${cleanDisplayName(name2)}] sudah terdaftar sebagai Pasangan Duplikat di divisi ini.`
+        };
+      }
+
+      // 2. Check if player 1 is already in another pair
+      if (norm1 === eNorm1 || norm1 === eNorm2) {
+        const existingPlayerName = norm1 === eNorm1 ? ent.name1 : ent.name2;
+        return {
+          valid: false,
+          sameNameConflict: {
+            playerName: existingPlayerName || cleanDisplayName(name1),
+            existingEntry: ent
+          }
+        };
+      }
+
+      // 3. Check if player 2 is already in another pair
+      if (norm2 === eNorm1 || norm2 === eNorm2) {
+        const existingPlayerName = norm2 === eNorm1 ? ent.name1 : ent.name2;
+        return {
+          valid: false,
+          sameNameConflict: {
+            playerName: existingPlayerName || cleanDisplayName(name2),
+            existingEntry: ent
+          }
+        };
+      }
+    } else {
+      // Single event
+      if (norm1 === eNorm1) {
+        return {
+          valid: false,
+          sameNameConflict: {
+            playerName: ent.name1,
+            existingEntry: ent
+          }
+        };
+      }
+    }
+  }
+
+  return { valid: true };
+}
+
 // Helper to check if entry ID is valid and exists in current division's entries
 export const getValidEntryId = (id: string | null | undefined, validEntryIds: Set<string>): string | null => {
   const cleaned = cleanEntryId(id);

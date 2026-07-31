@@ -5,8 +5,15 @@
 
 import React, { useState, useEffect } from 'react';
 import { Division, Entry, DivisionSettings } from '../types';
-import { Settings, Users, Plus, Trash2, Edit2, Check, ShieldAlert, Shuffle, Sparkles, UserCheck, FileSpreadsheet } from 'lucide-react';
+import { Settings, Users, Plus, Trash2, Edit2, Check, ShieldAlert, Shuffle, Sparkles, UserCheck, FileSpreadsheet, UserX, AlertTriangle } from 'lucide-react';
 import ExcelImportModal from './ExcelImportModal';
+import {
+  validateEntryInput,
+  inspectEntryRelations,
+  cleanDisplayName,
+  normalizeName,
+  isSameNormalizedName
+} from '../services/entryService';
 
 export const PAINDO_PLAYERS = [
   'Farid', 'Iswan', 'Nadja', 'Noor Irwandi', 'Akram', 'Haedar', 'Amri', 'Pandi', 
@@ -40,7 +47,16 @@ export default function DivisionEntries({ division, isDouble, onUpdateDivision, 
   const [showConfirm, setShowConfirm] = useState<{
     title: string;
     message: string;
+    confirmText?: string;
     onConfirm: () => void;
+  } | null>(null);
+
+  const [sameNameModal, setSameNameModal] = useState<{
+    playerName: string;
+    existingEntry: Entry;
+    pendingEntry: { name1: string; name2?: string; affiliation?: string };
+    isEditMode?: boolean;
+    editId?: string;
   } | null>(null);
 
   const [showExcelModal, setShowExcelModal] = useState(false);
@@ -50,10 +66,10 @@ export default function DivisionEntries({ division, isDouble, onUpdateDivision, 
     const defaultList = [...PAINDO_PLAYERS];
     if (division?.entries) {
       division.entries.forEach(e => {
-        if (e.name1 && e.name1 !== 'BYE / Pemain Cadangan' && !defaultList.includes(e.name1)) {
+        if (e.name1 && !defaultList.includes(e.name1)) {
           defaultList.push(e.name1);
         }
-        if (e.name2 && e.name2 !== 'BYE / Pemain Cadangan' && !defaultList.includes(e.name2)) {
+        if (e.name2 && !defaultList.includes(e.name2)) {
           defaultList.push(e.name2);
         }
       });
@@ -68,10 +84,10 @@ export default function DivisionEntries({ division, isDouble, onUpdateDivision, 
     const initialChecked = PAINDO_PLAYERS.slice(0, Math.min(24, PAINDO_PLAYERS.length));
     if (division?.entries) {
       division.entries.forEach(e => {
-        if (e.name1 && e.name1 !== 'BYE / Pemain Cadangan' && !initialChecked.includes(e.name1)) {
+        if (e.name1 && !initialChecked.includes(e.name1)) {
           initialChecked.push(e.name1);
         }
-        if (e.name2 && e.name2 !== 'BYE / Pemain Cadangan' && !initialChecked.includes(e.name2)) {
+        if (e.name2 && !initialChecked.includes(e.name2)) {
           initialChecked.push(e.name2);
         }
       });
@@ -86,11 +102,11 @@ export default function DivisionEntries({ division, isDouble, onUpdateDivision, 
       const updated = [...prev];
       let changed = false;
       division.entries.forEach(e => {
-        if (e.name1 && e.name1 !== 'BYE / Pemain Cadangan' && !updated.includes(e.name1)) {
+        if (e.name1 && !updated.includes(e.name1)) {
           updated.push(e.name1);
           changed = true;
         }
-        if (e.name2 && e.name2 !== 'BYE / Pemain Cadangan' && !updated.includes(e.name2)) {
+        if (e.name2 && !updated.includes(e.name2)) {
           updated.push(e.name2);
           changed = true;
         }
@@ -153,48 +169,60 @@ export default function DivisionEntries({ division, isDouble, onUpdateDivision, 
       return;
     }
 
-    const players = [...checkedPlayers];
-    // Shuffle
-    for (let i = players.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [players[i], players[j]] = [players[j], players[i]];
-    }
-
-    const timestamp = Date.now();
-    const randomizedPairs: Entry[] = [];
-    
-    for (let i = 0; i < players.length; i += 2) {
-      if (i + 1 < players.length) {
-        randomizedPairs.push({
-          id: `ent-rnd-${i}-${timestamp}`,
-          name1: players[i],
-          name2: players[i + 1],
-          affiliation: 'Internal Paindo'
-        });
-      } else {
-        // Handle odd player
-        randomizedPairs.push({
-          id: `ent-rnd-${i}-${timestamp}`,
-          name1: players[i],
-          name2: 'BYE / Pemain Cadangan',
-          affiliation: 'Internal Paindo'
-        });
+    const doRandomize = () => {
+      const players = [...checkedPlayers];
+      // Shuffle
+      for (let i = players.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [players[i], players[j]] = [players[j], players[i]];
       }
+
+      const timestamp = Date.now();
+      const randomizedPairs: Entry[] = [];
+      let oddPlayerName = '';
+      
+      for (let i = 0; i < players.length; i += 2) {
+        if (i + 1 < players.length) {
+          randomizedPairs.push({
+            id: `ent-rnd-${i}-${timestamp}`,
+            name1: cleanDisplayName(players[i]),
+            name2: cleanDisplayName(players[i + 1]),
+            affiliation: 'Internal Paindo'
+          });
+        } else {
+          // Odd 1 player remaining is left in pool as unpaired/cadangan (no BYE entry created)
+          oddPlayerName = cleanDisplayName(players[i]);
+        }
+      }
+
+      onUpdateDivision({
+        ...division,
+        entries: randomizedPairs,
+        groups: [],
+        roundRobinMatches: [],
+        knockoutStage: null,
+        champions: null
+      });
+
+      const oddNotice = oddPlayerName ? ` 1 pemain sisa [${oddPlayerName}] tetap berada di pool dengan status Cadangan/Belum Berpasangan.` : '';
+
+      setShowAlert({
+        title: 'Pasangan Berhasil Diacak! 🔀',
+        message: `Berhasil mengacak ${randomizedPairs.length} pasang ganda dari ${checkedPlayers.length} pemain aktif.${oddNotice} Semua grup & pertandingan sebelumnya diset ulang.`
+      });
+      setShowConfirm(null);
+    };
+
+    if (division.entries.length > 0 || division.groups.length > 0) {
+      setShowConfirm({
+        title: 'Acak Pasangan & Reset Turnamen?',
+        message: 'Pengacakan pasangan akan memperbarui seluruh daftar peserta divisi ini. Semua grup & pertandingan yang sudah dibentuk akan diset ulang. Apakah Anda yakin ingin melanjutkan?',
+        confirmText: 'Ya, Acak Pasangan',
+        onConfirm: doRandomize
+      });
+    } else {
+      doRandomize();
     }
-
-    onUpdateDivision({
-      ...division,
-      entries: randomizedPairs,
-      groups: [],
-      roundRobinMatches: [],
-      knockoutStage: null,
-      champions: null
-    });
-
-    setShowAlert({
-      title: 'Pasangan Berhasil Diacak! 🔀',
-      message: `Berhasil mengacak ${randomizedPairs.length} pasang ganda dari total ${checkedPlayers.length} pemain aktif. Semua grup & pertandingan sebelumnya diset ulang.`
-    });
   };
 
   // Update setting field
@@ -208,17 +236,13 @@ export default function DivisionEntries({ division, isDouble, onUpdateDivision, 
     });
   };
 
-  // Add new entry
-  const handleAddEntry = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!name1.trim()) return;
-    if (isDouble && !name2.trim()) return;
-
+  // Helper to commit new entry to division
+  const commitNewEntry = (entryData: { name1: string; name2?: string; affiliation?: string }) => {
     const newEntry: Entry = {
       id: `ent-${Date.now()}`,
-      name1: name1.trim(),
-      name2: isDouble ? name2.trim() : undefined,
-      affiliation: affiliation.trim() || undefined
+      name1: cleanDisplayName(entryData.name1),
+      name2: isDouble && entryData.name2 ? cleanDisplayName(entryData.name2) : undefined,
+      affiliation: entryData.affiliation ? cleanDisplayName(entryData.affiliation) : undefined
     };
 
     onUpdateDivision({
@@ -226,13 +250,258 @@ export default function DivisionEntries({ division, isDouble, onUpdateDivision, 
       entries: [...division.entries, newEntry]
     });
 
-    // Reset inputs
     setName1('');
     setName2('');
     setAffiliation('');
+    setSameNameModal(null);
   };
 
-  // Generate 12 custom double pairs
+  // Add new entry with PAINDO-004 validation
+  const handleAddEntry = (e: React.FormEvent) => {
+    e.preventDefault();
+    const cleaned1 = cleanDisplayName(name1);
+    const cleaned2 = cleanDisplayName(name2);
+    const cleanedAff = cleanDisplayName(affiliation);
+
+    if (!cleaned1) return;
+    if (isDouble && !cleaned2) return;
+
+    const validation = validateEntryInput(isDouble, cleaned1, cleaned2, division.entries);
+
+    if (!validation.valid) {
+      if (validation.error) {
+        setShowAlert({
+          title: 'Pendaftaran Ditolak ⚠️',
+          message: validation.error
+        });
+        return;
+      }
+
+      if (validation.sameNameConflict) {
+        // Same name detected! Open Same Name Decision modal
+        setSameNameModal({
+          playerName: validation.sameNameConflict.playerName,
+          existingEntry: validation.sameNameConflict.existingEntry,
+          pendingEntry: {
+            name1: cleaned1,
+            name2: isDouble ? cleaned2 : undefined,
+            affiliation: cleanedAff || undefined
+          }
+        });
+        return;
+      }
+    }
+
+    // Completely valid entry
+    commitNewEntry({
+      name1: cleaned1,
+      name2: isDouble ? cleaned2 : undefined,
+      affiliation: cleanedAff || undefined
+    });
+  };
+
+  // Helper to commit inline edit
+  const commitSaveEdit = (id: string, editData: { name1: string; name2?: string; affiliation?: string }) => {
+    const updatedEntries = division.entries.map(ent => {
+      if (ent.id === id) {
+        return {
+          ...ent,
+          name1: cleanDisplayName(editData.name1),
+          name2: isDouble && editData.name2 ? cleanDisplayName(editData.name2) : undefined,
+          affiliation: editData.affiliation ? cleanDisplayName(editData.affiliation) : undefined
+        };
+      }
+      return ent;
+    });
+
+    onUpdateDivision({
+      ...division,
+      entries: updatedEntries
+    });
+
+    setEditingEntryId(null);
+    setSameNameModal(null);
+  };
+
+  // Start inline editing
+  const startEdit = (entry: Entry) => {
+    setEditingEntryId(entry.id);
+    setEditName1(entry.name1);
+    setEditName2(entry.name2 || '');
+    setEditAffiliation(entry.affiliation || '');
+  };
+
+  // Save inline edit with PAINDO-004A protection & validation
+  const saveEdit = (id: string) => {
+    const cleaned1 = cleanDisplayName(editName1);
+    const cleaned2 = cleanDisplayName(editName2);
+    const cleanedAff = cleanDisplayName(editAffiliation);
+
+    if (!cleaned1) return;
+    if (isDouble && !cleaned2) return;
+
+    const rel = inspectEntryRelations(division, id);
+    const existingEnt = division.entries.find(e => e.id === id);
+
+    const nameChanged = existingEnt && (
+      existingEnt.name1 !== cleaned1 ||
+      (isDouble && (existingEnt.name2 || '') !== cleaned2)
+    );
+
+    // 1. Validate duplicates against other entries
+    const validation = validateEntryInput(isDouble, cleaned1, cleaned2, division.entries, id);
+
+    if (!validation.valid) {
+      if (validation.error) {
+        setShowAlert({
+          title: 'Pengeditan Ditolak ⚠️',
+          message: validation.error
+        });
+        return;
+      }
+
+      if (validation.sameNameConflict) {
+        setSameNameModal({
+          playerName: validation.sameNameConflict.playerName,
+          existingEntry: validation.sameNameConflict.existingEntry,
+          pendingEntry: {
+            name1: cleaned1,
+            name2: isDouble ? cleaned2 : undefined,
+            affiliation: cleanedAff || undefined
+          },
+          isEditMode: true,
+          editId: id
+        });
+        return;
+      }
+    }
+
+    // 2. If entry has scores/matches and name changed -> requires admin confirmation warning
+    if (nameChanged && (rel.hasScores || rel.inKnockout || rel.inChampions)) {
+      setShowConfirm({
+        title: 'Konfirmasi Koreksi Nama Peserta Berskor ⚠️',
+        message: `Peserta ini telah memiliki riwayat pertandingan/skor. Mengubah nama akan memperbarui nama tampilan peserta pada seluruh riwayat pertandingan tanpa mereset skor. Pastikan ini adalah KOREKSI EJAAN NAMA dan BUKAN pergantian orang/pemain. Lanjutkan simpan koreksi nama?`,
+        confirmText: 'Ya, Simpan Koreksi Nama',
+        onConfirm: () => {
+          commitSaveEdit(id, {
+            name1: cleaned1,
+            name2: isDouble ? cleaned2 : undefined,
+            affiliation: cleanedAff || undefined
+          });
+          setShowConfirm(null);
+        }
+      });
+      return;
+    }
+
+    commitSaveEdit(id, {
+      name1: cleaned1,
+      name2: isDouble ? cleaned2 : undefined,
+      affiliation: cleanedAff || undefined
+    });
+  };
+
+  // Remove entry with relation inspection protection
+  const removeEntry = (id: string) => {
+    const rel = inspectEntryRelations(division, id);
+    const targetEntry = division.entries.find(e => e.id === id);
+
+    if (!rel.canDelete) {
+      setShowAlert({
+        title: 'Penghapusan Diblokir ⚠️',
+        message: `${rel.reason} Penghapusan peserta biasa diblokir untuk menjaga integritas riwayat pertandingan dan skor. Silakan reset fase terkait terlebih dahulu.`
+      });
+      return;
+    }
+
+    const executeDelete = () => {
+      // 1. Remove from entries
+      const updatedEntries = division.entries.filter(ent => ent.id !== id);
+
+      // 2. Remove from groups
+      const updatedGroups = division.groups.map(g => ({
+        ...g,
+        entryIds: g.entryIds.filter(eId => eId !== id)
+      }));
+
+      // 3. Remove from round robin matches
+      const updatedMatches = division.roundRobinMatches.filter(
+        m => m.entryId1 !== id && m.entryId2 !== id
+      );
+
+      onUpdateDivision({
+        ...division,
+        entries: updatedEntries,
+        groups: updatedGroups,
+        roundRobinMatches: updatedMatches
+      });
+
+      setShowConfirm(null);
+    };
+
+    if (rel.inGroup) {
+      setShowConfirm({
+        title: 'Hapus Peserta dari Grup?',
+        message: `Peserta "${targetEntry?.name1}${targetEntry?.name2 ? ' / ' + targetEntry.name2 : ''}" saat ini terdaftar di ${rel.groupName || 'grup'}. Menghapus peserta ini akan mengeluarkannya dari grup. Apakah Anda yakin ingin melanjutkan?`,
+        confirmText: 'Ya, Hapus Peserta',
+        onConfirm: executeDelete
+      });
+    } else {
+      setShowConfirm({
+        title: 'Konfirmasi Penghapusan Peserta',
+        message: `Apakah Anda yakin ingin menghapus peserta "${targetEntry?.name1}${targetEntry?.name2 ? ' / ' + targetEntry.name2 : ''}"?`,
+        confirmText: 'Ya, Hapus',
+        onConfirm: executeDelete
+      });
+    }
+  };
+
+  // Handle Excel Import with PAINDO-004 rules
+  const handleExcelImport = (importedEntries: Entry[], mode: 'append' | 'replace') => {
+    let newEntriesList: Entry[] = [];
+
+    if (mode === 'replace') {
+      newEntriesList = importedEntries;
+      onUpdateDivision({
+        ...division,
+        entries: newEntriesList,
+        groups: [],
+        roundRobinMatches: [],
+        knockoutStage: null,
+        champions: null
+      });
+      setShowAlert({
+        title: 'Impor Berhasil! 📊',
+        message: `Berhasil mengganti seluruh daftar peserta dengan ${importedEntries.length} peserta baru dari Excel. Struktur grup & jadwal sebelumnya telah diset ulang.`
+      });
+    } else {
+      // Append mode: deduplicate against existing division entries
+      const validAppended: Entry[] = [];
+      let skippedCount = 0;
+
+      importedEntries.forEach(imp => {
+        const val = validateEntryInput(isDouble, imp.name1, imp.name2, [...division.entries, ...validAppended]);
+        if (val.valid) {
+          validAppended.push(imp);
+        } else {
+          skippedCount++;
+        }
+      });
+
+      newEntriesList = [...division.entries, ...validAppended];
+      onUpdateDivision({
+        ...division,
+        entries: newEntriesList
+      });
+
+      setShowAlert({
+        title: 'Impor Berhasil! 📊',
+        message: `Berhasil menambahkan ${validAppended.length} peserta baru dari Excel.${skippedCount > 0 ? ` (${skippedCount} peserta ditolak karena duplikat dengan divisi).` : ''}`
+      });
+    }
+  };
+
+  // Auto 12 pairs generator
   const handleGenerateUser12Pairs = () => {
     const timestamp = Date.now();
     const customPairs: Entry[] = [
@@ -258,112 +527,6 @@ export default function DivisionEntries({ division, isDouble, onUpdateDivision, 
       knockoutStage: null,
       champions: null
     });
-  };
-
-  // Handle Excel / Spreadsheet / CSV / Paste Import
-  const handleExcelImport = (importedEntries: Entry[], mode: 'append' | 'replace') => {
-    let newEntriesList: Entry[] = [];
-
-    if (mode === 'replace') {
-      newEntriesList = importedEntries;
-      onUpdateDivision({
-        ...division,
-        entries: newEntriesList,
-        groups: [],
-        roundRobinMatches: [],
-        knockoutStage: null,
-        champions: null
-      });
-      setShowAlert({
-        title: 'Impor Berhasil! 📊',
-        message: `Berhasil mengganti seluruh daftar peserta dengan ${importedEntries.length} peserta baru dari Excel/Spreadsheet. Struktur grup & jadwal sebelumnya telah diset ulang.`
-      });
-    } else {
-      // Append mode: retain existing and append imported
-      newEntriesList = [...division.entries, ...importedEntries];
-      onUpdateDivision({
-        ...division,
-        entries: newEntriesList
-      });
-      setShowAlert({
-        title: 'Impor Berhasil! 📊',
-        message: `Berhasil menambahkan ${importedEntries.length} peserta baru dari Excel/Spreadsheet ke daftar peserta terdaftar.`
-      });
-    }
-  };
-
-  // Start inline editing
-  const startEdit = (entry: Entry) => {
-    setEditingEntryId(entry.id);
-    setEditName1(entry.name1);
-    setEditName2(entry.name2 || '');
-    setEditAffiliation(entry.affiliation || '');
-  };
-
-  // Save inline edit
-  const saveEdit = (id: string) => {
-    if (!editName1.trim()) return;
-    if (isDouble && !editName2.trim()) return;
-
-    const updatedEntries = division.entries.map(ent => {
-      if (ent.id === id) {
-        return {
-          ...ent,
-          name1: editName1.trim(),
-          name2: isDouble ? editName2.trim() : undefined,
-          affiliation: editAffiliation.trim() || undefined
-        };
-      }
-      return ent;
-    });
-
-    onUpdateDivision({
-      ...division,
-      entries: updatedEntries
-    });
-
-    setEditingEntryId(null);
-  };
-
-  // Remove entry
-  const removeEntry = (id: string) => {
-    const isInGroup = division.groups.some(g => g.entryIds.includes(id));
-    const isInMatches = division.roundRobinMatches.some(m => m.entryId1 === id || m.entryId2 === id);
-
-    const executeDelete = () => {
-      // 1. Remove from entries
-      const updatedEntries = division.entries.filter(ent => ent.id !== id);
-
-      // 2. Remove from groups
-      const updatedGroups = division.groups.map(g => ({
-        ...g,
-        entryIds: g.entryIds.filter(eId => eId !== id)
-      }));
-
-      // 3. Remove from round robin matches if match references this entry
-      const updatedMatches = division.roundRobinMatches.filter(
-        m => m.entryId1 !== id && m.entryId2 !== id
-      );
-
-      onUpdateDivision({
-        ...division,
-        entries: updatedEntries,
-        groups: updatedGroups,
-        roundRobinMatches: updatedMatches
-      });
-
-      setShowConfirm(null);
-    };
-
-    if (isInGroup || isInMatches) {
-      setShowConfirm({
-        title: 'Hapus Peserta dari Turnamen?',
-        message: 'Peserta ini saat ini terdaftar di dalam grup atau jadwal pertandingan. Menghapus peserta ini akan otomatis mengeluarkannya dari grup dan memperbarui jadwal pertandingan terkait. Apakah Anda yakin ingin melanjutkan?',
-        onConfirm: executeDelete
-      });
-    } else {
-      executeDelete();
-    }
   };
 
   return (
@@ -600,9 +763,13 @@ export default function DivisionEntries({ division, isDouble, onUpdateDivision, 
           </form>
 
           {/* Player Pool List */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2.5 p-4 bg-white rounded-xl border border-slate-150 max-h-56 overflow-y-auto mb-5">
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2.5 p-4 bg-white rounded-xl border border-slate-150 max-h-56 overflow-y-auto mb-5">
             {poolPlayers.map(player => {
               const isChecked = checkedPlayers.includes(player);
+              const isPairedInDiv = division.entries.some(e =>
+                isSameNormalizedName(e.name1, player) || (e.name2 && isSameNormalizedName(e.name2, player))
+              );
+
               return (
                 <div
                   key={player}
@@ -612,22 +779,32 @@ export default function DivisionEntries({ division, isDouble, onUpdateDivision, 
                       : 'bg-white hover:bg-slate-50 border-slate-200 text-slate-600'
                   }`}
                 >
-                  <label className="flex items-center gap-2 flex-1 cursor-pointer select-none">
+                  <label className="flex items-center gap-2 flex-1 cursor-pointer select-none min-w-0">
                     <input
                       type="checkbox"
                       checked={isChecked}
                       onChange={() => handleTogglePlayer(player)}
-                      className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+                      className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 shrink-0"
                     />
-                    <span>{player}</span>
+                    <span className="truncate">{player}</span>
                   </label>
+                  
+                  {!isPairedInDiv ? (
+                    <span className="text-[10px] bg-amber-100 text-amber-800 font-extrabold px-1.5 py-0.5 rounded border border-amber-200 shrink-0" title="Belum masuk ke pasangan/daftar peserta">
+                      Belum Berpasangan
+                    </span>
+                  ) : (
+                    <span className="text-[10px] bg-slate-100 text-slate-500 font-medium px-1.5 py-0.5 rounded shrink-0">
+                      Sudah Berpasangan
+                    </span>
+                  )}
                   
                   {/* Delete button from pool */}
                   <button
                     type="button"
                     onClick={() => handleRemovePoolPlayer(player)}
                     title={`Hapus ${player} dari Pool`}
-                    className="opacity-0 group-hover:opacity-100 p-1 hover:bg-red-50 hover:text-red-600 rounded text-slate-400 transition ml-1"
+                    className="opacity-0 group-hover:opacity-100 p-1 hover:bg-red-50 hover:text-red-600 rounded text-slate-400 transition ml-0.5 shrink-0"
                   >
                     <Trash2 className="h-3 w-3" />
                   </button>
@@ -638,13 +815,13 @@ export default function DivisionEntries({ division, isDouble, onUpdateDivision, 
 
           <div className="flex flex-col sm:flex-row items-center justify-between gap-4 p-4 bg-emerald-50/50 rounded-xl border border-emerald-100/70">
             <div className="text-xs font-medium text-slate-600 flex items-center gap-1.5">
-              <UserCheck className="h-4 w-4 text-emerald-600" />
+              <UserCheck className="h-4 w-4 text-emerald-600 shrink-0" />
               <span>
                 Dengan <strong>{checkedPlayers.length} pemain</strong> terpilih, Anda dapat menghasilkan{' '}
                 <strong>{Math.floor(checkedPlayers.length / 2)} pasang ganda</strong>.
                 {checkedPlayers.length % 2 !== 0 && (
-                  <span className="text-amber-600 ml-1">
-                    (Jumlah ganjil, 1 orang akan dipasangkan dengan BYE)
+                  <span className="text-amber-700 font-bold ml-1">
+                    (Jumlah ganjil: 1 orang tetap berada di pool dengan status Belum Berpasangan/Cadangan)
                   </span>
                 )}
               </span>
@@ -1011,7 +1188,90 @@ export default function DivisionEntries({ division, isDouble, onUpdateDivision, 
                 className="px-4 py-2 text-sm font-extrabold text-rose-600 hover:text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-lg transition"
                 id="confirm-submit-button"
               >
-                Ya, Hapus Peserta
+                {showConfirm.confirmText || 'Ya, Lanjutkan'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {sameNameModal && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fade-in" id="same-name-decision-modal">
+          <div className="bg-white rounded-2xl max-w-lg w-full border border-slate-150 p-6 shadow-2xl transform transition-all animate-scale-up space-y-4" id="same-name-decision-card">
+            <div className="flex items-start gap-3">
+              <div className="p-2.5 bg-amber-50 border border-amber-200 rounded-xl text-amber-600 shrink-0">
+                <AlertTriangle className="h-6 w-6" />
+              </div>
+              <div>
+                <h3 className="text-lg font-extrabold text-navy">
+                  Deteksi Nama Sama — Klasifikasi Identitas
+                </h3>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Validasi Pendaftaran Divisi {division.eventName}
+                </p>
+              </div>
+            </div>
+
+            <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-2 text-xs text-slate-700 leading-relaxed">
+              <p>
+                Pemain <strong className="text-navy font-extrabold">"{sameNameModal.playerName}"</strong> terdeteksi sudah muncul pada pendaftaran lain dalam divisi ini:
+              </p>
+              <div className="p-2.5 bg-white border border-slate-200 rounded-lg font-mono text-[11px] text-slate-800">
+                <strong>Entry Lama:</strong> {sameNameModal.existingEntry.name1}
+                {sameNameModal.existingEntry.name2 ? ` / ${sameNameModal.existingEntry.name2}` : ''}
+                {sameNameModal.existingEntry.affiliation ? ` (${sameNameModal.existingEntry.affiliation})` : ' (Tanpa Klub)'}
+              </div>
+              <p className="text-slate-500">
+                Apakah calon pemain baru ini adalah <strong>orang yang sama</strong> atau <strong>orang berbeda</strong> dengan yang sudah terdaftar?
+              </p>
+            </div>
+
+            <div className="p-3 bg-amber-50/70 border border-amber-200 rounded-xl text-[11px] text-amber-800">
+              ⚠️ <em>Catatan Sistem:</em> Gunakan kolom <strong>Klub/Afiliasi</strong> sebagai pembeda dan pertahankan nama asli pada kolom nama. Karena aplikasi belum memiliki <code>playerId</code> tersimpan, identitas dianggap belum stabil di tingkat sistem.
+            </div>
+
+            <div className="flex flex-col sm:flex-row gap-2.5 pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  const pName = sameNameModal.playerName;
+                  const exEntry = sameNameModal.existingEntry;
+                  setSameNameModal(null);
+                  setShowAlert({
+                    title: 'Pendaftaran Ditolak 🛑',
+                    message: `Pemain "${pName}" sudah terdaftar pada entry: "${exEntry.name1}${exEntry.name2 ? ' / ' + exEntry.name2 : ''}". Dalam satu divisi, satu pemain hanya boleh mendaftar 1 kali.`
+                  });
+                }}
+                className="flex-1 px-4 py-2.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-xl text-xs font-extrabold transition flex items-center justify-center gap-1.5"
+                id="btn-confirm-same-person"
+              >
+                <UserX className="h-4 w-4" />
+                Orang yang Sama (Tolak Duplikat)
+              </button>
+              
+              <button
+                type="button"
+                onClick={() => {
+                  const pending = sameNameModal.pendingEntry;
+                  const isEdit = sameNameModal.isEditMode;
+                  const editId = sameNameModal.editId;
+
+                  if (isEdit && editId) {
+                    commitSaveEdit(editId, pending);
+                  } else {
+                    commitNewEntry(pending);
+                  }
+
+                  setShowAlert({
+                    title: 'Pendaftaran Diterima ✍️',
+                    message: `Identitas "${sameNameModal.playerName}" disetujui sebagai orang yang berbeda. (Catatan: Sistem belum memiliki playerId stabil).`
+                  });
+                }}
+                className="flex-1 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-extrabold transition flex items-center justify-center gap-1.5 card-shadow shadow-xs"
+                id="btn-confirm-different-person"
+              >
+                <UserCheck className="h-4 w-4" />
+                Orang Berbeda (Izinkan Entry)
               </button>
             </div>
           </div>
