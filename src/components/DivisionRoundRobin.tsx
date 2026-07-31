@@ -296,17 +296,49 @@ export default function DivisionRoundRobin({ division, onUpdateDivision, isAdmin
     }
 
     setScoringMatch(match);
-    setScore1(match.score1 ?? '');
-    setScore2(match.score2 ?? '');
-    setMatchStatus(match.status === 'belum_dimainkan' ? 'selesai' : match.status);
-    setWalkoverWinner(match.winnerId || match.entryId1 || '');
+    const initialWinner = match.winnerId || match.entryId1 || '';
+    setWalkoverWinner(initialWinner);
     setWoReasonCategory(match.notes ? 'lainnya' : 'cedera');
     setWoCustomReason(match.notes || '');
+
+    const initialStatus = match.status === 'belum_dimainkan' ? 'selesai' : match.status;
+    setMatchStatus(initialStatus);
+
+    if (match.score1 !== null && match.score2 !== null) {
+      setScore1(match.score1);
+      setScore2(match.score2);
+    } else if (initialStatus === 'walkover' && settings.targetScore) {
+      setScore1(initialWinner === match.entryId1 ? settings.targetScore : 0);
+      setScore2(initialWinner === match.entryId2 ? settings.targetScore : 0);
+    } else {
+      setScore1('');
+      setScore2('');
+    }
   };
 
   // Close scoring modal
   const closeScoringModal = () => {
     setScoringMatch(null);
+  };
+
+  const handleSelectWoWinner = (winnerId: string) => {
+    setWalkoverWinner(winnerId);
+    if (scoringMatch) {
+      const s1Num = Number(score1);
+      const s2Num = Number(score2);
+      if (score1 === '' || score2 === '' || isNaN(s1Num) || isNaN(s2Num) || s1Num === s2Num) {
+        if (settings.targetScore) {
+          setScore1(winnerId === scoringMatch.entryId1 ? settings.targetScore : 0);
+          setScore2(winnerId === scoringMatch.entryId2 ? settings.targetScore : 0);
+        }
+      } else if (winnerId === scoringMatch.entryId1 && s1Num <= s2Num) {
+        setScore1(s2Num);
+        setScore2(s1Num);
+      } else if (winnerId === scoringMatch.entryId2 && s2Num <= s1Num) {
+        setScore1(s2Num);
+        setScore2(s1Num);
+      }
+    }
   };
 
   const executeCommitScore = (
@@ -368,17 +400,49 @@ export default function DivisionRoundRobin({ division, onUpdateDivision, isAdmin
         return;
       }
 
-      const targetScore = settings.targetScore || 11;
-      if (walkoverWinner === scoringMatch.entryId1) {
-        finalScore1 = targetScore;
-        finalScore2 = 0;
-        winnerId = scoringMatch.entryId1;
-        loserId = scoringMatch.entryId2;
-      } else {
-        finalScore1 = 0;
-        finalScore2 = targetScore;
-        winnerId = scoringMatch.entryId2;
-        loserId = scoringMatch.entryId1;
+      const s1Num = Number(score1);
+      const s2Num = Number(score2);
+
+      if (score1 === '' || score2 === '' || isNaN(s1Num) || isNaN(s2Num)) {
+        setShowAlert({
+          title: 'Skor WO Wajib Diisi ⚠️',
+          message: 'Kedua skor Walkover (WO) wajib diisi dengan angka bulat non-negatif.'
+        });
+        return;
+      }
+
+      if (s1Num < 0 || s2Num < 0 || !Number.isInteger(s1Num) || !Number.isInteger(s2Num)) {
+        setShowAlert({
+          title: 'Skor WO Tidak Valid ⚠️',
+          message: 'Skor Walkover (WO) harus berupa bilangan bulat non-negatif (0 atau lebih besar).'
+        });
+        return;
+      }
+
+      if (s1Num === s2Num) {
+        setShowAlert({
+          title: 'Skor WO Seri Tidak Diperbolehkan ⚠️',
+          message: 'Skor Walkover (WO) tidak boleh seri. Pilih pemenang dengan skor lebih tinggi.'
+        });
+        return;
+      }
+
+      loserId = walkoverWinner === scoringMatch.entryId1 ? scoringMatch.entryId2 : scoringMatch.entryId1;
+
+      if (walkoverWinner === scoringMatch.entryId1 && s1Num <= s2Num) {
+        setShowAlert({
+          title: 'Skor Tidak Sesuai Pemenang WO ⚠️',
+          message: `Peserta 1 (${getEntryLabel(scoringMatch.entryId1)}) dipilih sebagai pemenang WO, maka skor Peserta 1 (${s1Num}) harus lebih besar dari Peserta 2 (${s2Num}).`
+        });
+        return;
+      }
+
+      if (walkoverWinner === scoringMatch.entryId2 && s2Num <= s1Num) {
+        setShowAlert({
+          title: 'Skor Tidak Sesuai Pemenang WO ⚠️',
+          message: `Peserta 2 (${getEntryLabel(scoringMatch.entryId2)}) dipilih sebagai pemenang WO, maka skor Peserta 2 (${s2Num}) harus lebih besar dari Peserta 1 (${s1Num}).`
+        });
+        return;
       }
 
       const reasonText = woReasonCategory === 'lainnya'
@@ -393,7 +457,7 @@ export default function DivisionRoundRobin({ division, onUpdateDivision, isAdmin
             keputusan_panitia: 'Keputusan Panitia / Force Majeure'
           }[woReasonCategory] || woReasonCategory;
 
-      if (woReasonCategory === 'lainnya' && !reasonText) {
+      if (!reasonText) {
         setShowAlert({
           title: 'Alasan WO Wajib Diisi ⚠️',
           message: 'Silakan tuliskan alasan rincian Walkover / Force Majeure.'
@@ -401,6 +465,9 @@ export default function DivisionRoundRobin({ division, onUpdateDivision, isAdmin
         return;
       }
 
+      finalScore1 = s1Num;
+      finalScore2 = s2Num;
+      winnerId = walkoverWinner;
       finalNotes = `Walkover (WO) - ${reasonText}`;
 
       executeCommitScore(finalScore1, finalScore2, 'walkover', winnerId, loserId, finalNotes);
@@ -487,9 +554,24 @@ export default function DivisionRoundRobin({ division, onUpdateDivision, isAdmin
     setKorReasonCategory('keputusan_panitia');
     setKorCustomReason('');
     setKorActionType(match.status === 'walkover' ? 'mark_walkover' : 'update_score');
-    setKorScore1(match.score1 ?? '');
-    setKorScore2(match.score2 ?? '');
-    setKorWinnerId(match.winnerId || match.entryId1 || '');
+    const wId = match.winnerId || match.entryId1 || '';
+    setKorWinnerId(wId);
+
+    if (match.status === 'walkover') {
+      if (match.score1 !== null && match.score2 !== null) {
+        setKorScore1(match.score1);
+        setKorScore2(match.score2);
+      } else if (settings.targetScore) {
+        setKorScore1(wId === match.entryId1 ? settings.targetScore : 0);
+        setKorScore2(wId === match.entryId2 ? settings.targetScore : 0);
+      } else {
+        setKorScore1('');
+        setKorScore2('');
+      }
+    } else {
+      setKorScore1(match.score1 ?? '');
+      setKorScore2(match.score2 ?? '');
+    }
   };
 
   const executeAdminCorrection = () => {
@@ -540,18 +622,50 @@ export default function DivisionRoundRobin({ division, onUpdateDivision, isAdmin
         message: `Pertandingan ${getEntryLabel(correctionMatch.entryId1)} vs ${getEntryLabel(correctionMatch.entryId2)} di-reset menjadi Belum Dimainkan. Alasan: ${finalReason}.`
       });
     } else if (korActionType === 'mark_walkover') {
-      const targetScore = settings.targetScore || 11;
       const wId = korWinnerId || correctionMatch.entryId1;
       const lId = wId === correctionMatch.entryId1 ? correctionMatch.entryId2 : correctionMatch.entryId1;
-      const s1 = wId === correctionMatch.entryId1 ? targetScore : 0;
-      const s2 = wId === correctionMatch.entryId1 ? 0 : targetScore;
+
+      const s1Num = Number(korScore1);
+      const s2Num = Number(korScore2);
+
+      if (korScore1 === '' || korScore2 === '' || isNaN(s1Num) || isNaN(s2Num) || s1Num < 0 || s2Num < 0 || !Number.isInteger(s1Num) || !Number.isInteger(s2Num)) {
+        setShowAlert({
+          title: 'Skor WO Tidak Valid ⚠️',
+          message: 'Kedua skor Walkover (WO) wajib diisi dengan bilangan bulat non-negatif.'
+        });
+        return;
+      }
+
+      if (s1Num === s2Num) {
+        setShowAlert({
+          title: 'Skor WO Seri Tidak Diperbolehkan ⚠️',
+          message: 'Skor Walkover (WO) tidak boleh seri. Pilih pemenang dengan skor lebih tinggi.'
+        });
+        return;
+      }
+
+      if (wId === correctionMatch.entryId1 && s1Num <= s2Num) {
+        setShowAlert({
+          title: 'Skor Tidak Sesuai Pemenang WO ⚠️',
+          message: `Peserta 1 (${getEntryLabel(correctionMatch.entryId1)}) dipilih sebagai pemenang WO, maka skor Peserta 1 (${s1Num}) harus lebih besar dari Peserta 2 (${s2Num}).`
+        });
+        return;
+      }
+
+      if (wId === correctionMatch.entryId2 && s2Num <= s1Num) {
+        setShowAlert({
+          title: 'Skor Tidak Sesuai Pemenang WO ⚠️',
+          message: `Peserta 2 (${getEntryLabel(correctionMatch.entryId2)}) dipilih sebagai pemenang WO, maka skor Peserta 2 (${s2Num}) harus lebih besar dari Peserta 1 (${s1Num}).`
+        });
+        return;
+      }
 
       updatedMatches = roundRobinMatches.map(m => {
         if (m.id === correctionMatch.id) {
           return {
             ...m,
-            score1: s1,
-            score2: s2,
+            score1: s1Num,
+            score2: s2Num,
             status: 'walkover' as const,
             winnerId: wId,
             loserId: lId,
@@ -563,7 +677,7 @@ export default function DivisionRoundRobin({ division, onUpdateDivision, isAdmin
 
       setShowAlert({
         title: 'Koreksi Walkover Berhasil ✅',
-        message: `Pertandingan ditandai Walkover dengan pemenang ${getEntryLabel(wId)}. Alasan: ${finalReason}.`
+        message: `Pertandingan ditandai Walkover dengan pemenang ${getEntryLabel(wId)} (Skor ${s1Num}-${s2Num}). Alasan: ${finalReason}.`
       });
     } else {
       const s1Num = Number(korScore1);
@@ -762,7 +876,7 @@ export default function DivisionRoundRobin({ division, onUpdateDivision, isAdmin
     setShowResetScheduleModal(false);
   };
 
-  // Clean / Fix Match Integrity
+  // Clean / Fix Match Integrity (Pure & Bounded Auto-Correction)
   const handleFixMatchIntegrity = () => {
     if (lockStatus.isLocked) {
       setShowAlert({ title: 'Aksi Terkunci 🔒', message: lockStatus.reason });
@@ -770,60 +884,66 @@ export default function DivisionRoundRobin({ division, onUpdateDivision, isAdmin
     }
 
     setShowConfirm({
-      title: 'Koreksi Otomatis Integrasi Jadwal',
-      message: 'Sistem akan merapikan match duplikat, memperbaiki winnerId yang tidak sesuai dengan skor, dan menyusun ulang nomor pertandingan. Apakah Anda yakin ingin melanjutkannya?',
+      title: 'Koreksi Otomatis Integritas Jadwal',
+      message: 'Sistem hanya akan memperbaiki pemenang (winnerId) yang tidak sesuai dengan skor valid dan memperbarui status pertandingan yang sudah memiliki skor lengkap. Masalah duplikat, self-match, atau peserta tidak valid tidak akan dihapus otomatis dan harus dikoreksi manual. Apakah Anda yakin ingin melanjutkan?',
       onConfirm: () => {
-        const seenPairs = new Set<string>();
-        const seenIds = new Set<string>();
-        const cleanedMatches: Match[] = [];
+        let updatedCount = 0;
 
-        (roundRobinMatches || []).forEach(m => {
-          if (!m.id || seenIds.has(m.id)) return;
-          if (!m.entryId1 || !m.entryId2) return;
-          if (m.entryId1 === m.entryId2) return;
-
-          const pairKey = [m.entryId1, m.entryId2].sort().join('::');
-          if (seenPairs.has(pairKey)) return;
-
-          seenIds.add(m.id);
-          seenPairs.add(pairKey);
-
-          let fixedScore1 = m.score1;
-          let fixedScore2 = m.score2;
+        const cleanedMatches: Match[] = (roundRobinMatches || []).map(m => {
+          let updated = false;
           let fixedWinnerId = m.winnerId;
           let fixedLoserId = m.loserId;
           let fixedStatus = m.status;
 
-          if (fixedStatus === 'selesai' && fixedScore1 !== null && fixedScore2 !== null) {
-            if (fixedScore1 > fixedScore2) {
-              fixedWinnerId = m.entryId1;
-              fixedLoserId = m.entryId2;
-            } else if (fixedScore2 > fixedScore1) {
-              fixedWinnerId = m.entryId2;
-              fixedLoserId = m.entryId1;
+          // Deterministic Fix: Complete valid scores exist -> sync winnerId & status
+          if (m.score1 !== null && m.score2 !== null && m.score1 !== m.score2 && m.score1 >= 0 && m.score2 >= 0) {
+            const expectedWinner = m.score1 > m.score2 ? m.entryId1 : m.entryId2;
+            const expectedLoser = m.score1 > m.score2 ? m.entryId2 : m.entryId1;
+
+            if (m.status === 'selesai') {
+              if (m.winnerId !== expectedWinner || m.loserId !== expectedLoser) {
+                fixedWinnerId = expectedWinner;
+                fixedLoserId = expectedLoser;
+                updated = true;
+              }
+            } else if (m.status === 'belum_dimainkan') {
+              fixedStatus = 'selesai';
+              fixedWinnerId = expectedWinner;
+              fixedLoserId = expectedLoser;
+              updated = true;
             }
           }
 
-          cleanedMatches.push({
-            ...m,
-            score1: fixedScore1,
-            score2: fixedScore2,
-            winnerId: fixedWinnerId,
-            loserId: fixedLoserId,
-            status: fixedStatus,
-            matchNum: cleanedMatches.length + 1
+          if (updated) {
+            updatedCount++;
+            return {
+              ...m,
+              winnerId: fixedWinnerId,
+              loserId: fixedLoserId,
+              status: fixedStatus
+            };
+          }
+
+          return m;
+        });
+
+        if (updatedCount > 0) {
+          onUpdateDivision({
+            ...division,
+            roundRobinMatches: cleanedMatches
           });
-        });
 
-        onUpdateDivision({
-          ...division,
-          roundRobinMatches: cleanedMatches
-        });
+          setShowAlert({
+            title: 'Koreksi Otomatis Berhasil ✅',
+            message: `Berhasil mengoreksi ${updatedCount} pertandingan (pemenang/status disesuaikan dengan skor).`
+          });
+        } else {
+          setShowAlert({
+            title: 'Integritas Hasil Valid 👍',
+            message: 'Tidak ada status hasil atau pemenang (winnerId) yang perlu diperbaiki otomatis. Jika terdapat peringatan duplikat/peserta, silakan periksa rincian untuk koreksi manual.'
+          });
+        }
 
-        setShowAlert({
-          title: 'Integritas Berhasil Diperbaiki ✅',
-          message: `Berhasil merapikan ${cleanedMatches.length} pertandingan fase grup.`
-        });
         setShowConfirm(null);
       }
     });
@@ -1340,10 +1460,10 @@ export default function DivisionRoundRobin({ division, onUpdateDivision, isAdmin
                 <div className="space-y-3 p-4 rounded-xl bg-amber-50 border border-amber-200 text-xs">
                   <div className="flex items-center gap-1.5 text-amber-900 font-extrabold">
                     <AlertCircle className="h-4 w-4 text-amber-600" />
-                    Pilih Pemenang Walkover (WO) & Alasan
+                    Pilih Pemenang Walkover (WO), Skor & Alasan
                   </div>
-                  <p className="text-amber-800 leading-relaxed">
-                    Pemenang WO mendapatkan skor <strong>{settings.targetScore || 11}</strong> dan pihak kalah mendapatkan <strong>0</strong>.
+                  <p className="text-amber-800 leading-relaxed text-[11px]">
+                    Status Walkover (WO) disimpan bersama pemenang, skor manual (contoh: 11–0, 15–0, 21–0), dan alasan WO wajib. Skor pemenang WO harus lebih besar dari lawan.
                   </p>
 
                   <div className="space-y-1.5">
@@ -1351,7 +1471,7 @@ export default function DivisionRoundRobin({ division, onUpdateDivision, isAdmin
                     <div className="space-y-2">
                       <button
                         type="button"
-                        onClick={() => setWalkoverWinner(scoringMatch.entryId1 || '')}
+                        onClick={() => handleSelectWoWinner(scoringMatch.entryId1 || '')}
                         className={`w-full p-2.5 rounded-lg border text-left font-extrabold text-xs transition flex items-center justify-between ${
                           walkoverWinner === scoringMatch.entryId1
                             ? 'bg-navy text-neon border-navy card-shadow'
@@ -1364,7 +1484,7 @@ export default function DivisionRoundRobin({ division, onUpdateDivision, isAdmin
 
                       <button
                         type="button"
-                        onClick={() => setWalkoverWinner(scoringMatch.entryId2 || '')}
+                        onClick={() => handleSelectWoWinner(scoringMatch.entryId2 || '')}
                         className={`w-full p-2.5 rounded-lg border text-left font-extrabold text-xs transition flex items-center justify-between ${
                           walkoverWinner === scoringMatch.entryId2
                             ? 'bg-navy text-neon border-navy card-shadow'
@@ -1374,6 +1494,39 @@ export default function DivisionRoundRobin({ division, onUpdateDivision, isAdmin
                         <span className="truncate">{getEntryLabel(scoringMatch.entryId2)} (Menang WO)</span>
                         {walkoverWinner === scoringMatch.entryId2 && <Check className="h-4 w-4 shrink-0" />}
                       </button>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3 pt-1">
+                    <div>
+                      <label className="font-bold text-slate-700 block text-[11px] truncate mb-1">
+                        Skor {getEntryLabel(scoringMatch.entryId1)} <span className="text-rose-500">*</span>
+                      </label>
+                      <input
+                        type="number"
+                        required
+                        min="0"
+                        id="wo-score-1-input"
+                        value={score1}
+                        onChange={(e) => setScore1(e.target.value)}
+                        placeholder="Skor WO"
+                        className="w-full px-3 py-2 text-center text-base font-bold font-mono bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-navy/15"
+                      />
+                    </div>
+                    <div>
+                      <label className="font-bold text-slate-700 block text-[11px] truncate mb-1">
+                        Skor {getEntryLabel(scoringMatch.entryId2)} <span className="text-rose-500">*</span>
+                      </label>
+                      <input
+                        type="number"
+                        required
+                        min="0"
+                        id="wo-score-2-input"
+                        value={score2}
+                        onChange={(e) => setScore2(e.target.value)}
+                        placeholder="Skor WO"
+                        className="w-full px-3 py-2 text-center text-base font-bold font-mono bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-navy/15"
+                      />
                     </div>
                   </div>
 
@@ -1561,21 +1714,60 @@ export default function DivisionRoundRobin({ division, onUpdateDivision, isAdmin
               )}
 
               {korActionType === 'mark_walkover' && (
-                <div className="space-y-1.5 p-3 bg-amber-50 border border-amber-200 rounded-xl">
-                  <label className="font-bold text-amber-900 block">Pilih Pemenang WO:</label>
-                  <select
-                    value={korWinnerId}
-                    onChange={(e) => setKorWinnerId(e.target.value)}
-                    className="w-full px-3 py-2 bg-white border border-amber-300 rounded-xl font-bold text-amber-900"
-                  >
-                    <option value={correctionMatch.entryId1 || ''}>{getEntryLabel(correctionMatch.entryId1)} (Menang WO)</option>
-                    <option value={correctionMatch.entryId2 || ''}>{getEntryLabel(correctionMatch.entryId2)} (Menang WO)</option>
-                  </select>
+                <div className="space-y-3 p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs">
+                  <div>
+                    <label className="font-bold text-amber-900 block mb-1">Pilih Pemenang WO <span className="text-rose-500">*</span></label>
+                    <select
+                      value={korWinnerId}
+                      onChange={(e) => {
+                        const newW = e.target.value;
+                        setKorWinnerId(newW);
+                        if (settings.targetScore) {
+                          if (newW === correctionMatch.entryId1 && Number(korScore1) <= Number(korScore2)) {
+                            setKorScore1(settings.targetScore);
+                            setKorScore2(0);
+                          } else if (newW === correctionMatch.entryId2 && Number(korScore2) <= Number(korScore1)) {
+                            setKorScore1(0);
+                            setKorScore2(settings.targetScore);
+                          }
+                        }
+                      }}
+                      className="w-full px-3 py-2 bg-white border border-amber-300 rounded-xl font-bold text-amber-900 focus:outline-none"
+                    >
+                      <option value={correctionMatch.entryId1 || ''}>{getEntryLabel(correctionMatch.entryId1)} (Menang WO)</option>
+                      <option value={correctionMatch.entryId2 || ''}>{getEntryLabel(correctionMatch.entryId2)} (Menang WO)</option>
+                    </select>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3 pt-1">
+                    <div>
+                      <label className="text-[10px] font-bold text-amber-900 block truncate">{getEntryLabel(correctionMatch.entryId1)}</label>
+                      <input
+                        type="number"
+                        min="0"
+                        value={korScore1}
+                        onChange={(e) => setKorScore1(e.target.value)}
+                        placeholder="Skor WO 1"
+                        className="w-full mt-1 px-3 py-1.5 bg-white border border-amber-300 rounded-lg text-sm font-bold font-mono focus:outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-amber-900 block truncate">{getEntryLabel(correctionMatch.entryId2)}</label>
+                      <input
+                        type="number"
+                        min="0"
+                        value={korScore2}
+                        onChange={(e) => setKorScore2(e.target.value)}
+                        placeholder="Skor WO 2"
+                        className="w-full mt-1 px-3 py-1.5 bg-white border border-amber-300 rounded-lg text-sm font-bold font-mono focus:outline-none"
+                      />
+                    </div>
+                  </div>
                 </div>
               )}
 
               <p className="text-[10px] text-slate-400 italic">
-                Catatan Sesi: Alasan disimpan pada histori lokal sesi dan akan memperbarui state pertandingan tanpa mengubah schema database Supabase.
+                Catatan Sesi: Alasan disimpan sebagai catatan koreksi sementara pada sesi aplikasi dan akan memperbarui state pertandingan tanpa mengubah schema database Supabase.
               </p>
             </div>
 

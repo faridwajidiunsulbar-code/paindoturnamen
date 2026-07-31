@@ -114,16 +114,21 @@ export function inspectRoundRobinMatches(division: Division): MatchAnomalies {
     }
 
     // 10. Winner ID mismatch
-    if (m.status === 'selesai' && m.score1 !== null && m.score2 !== null && m.score1 !== m.score2) {
+    if ((m.status === 'selesai' || m.status === 'walkover') && m.score1 !== null && m.score2 !== null && m.score1 !== m.score2) {
       const expectedWinner = m.score1 > m.score2 ? m.entryId1 : m.entryId2;
       if (m.winnerId !== expectedWinner) {
         warnings.push(`${matchLabel}: Pemenang (winnerId) tidak sesuai dengan pencapaian skor tertinggi.`);
       }
     }
 
-    // 11. Walkover status without winnerId
-    if (m.status === 'walkover' && !m.winnerId) {
-      warnings.push(`${matchLabel}: Pertandingan berstatus Walkover (WO) tetapi pemenang (winnerId) tidak terisi.`);
+    // 11. Walkover status without winnerId or notes
+    if (m.status === 'walkover') {
+      if (!m.winnerId) {
+        warnings.push(`${matchLabel}: Pertandingan berstatus Walkover (WO) tetapi pemenang (winnerId) tidak terisi.`);
+      }
+      if (!m.notes) {
+        warnings.push(`${matchLabel}: Pertandingan berstatus Walkover (WO) tetapi alasan/catatan tidak terisi.`);
+      }
     }
   });
 
