@@ -6,7 +6,31 @@
 import React, { useState } from 'react';
 import { Division, Match, Entry, Group, GroupStandingRow } from '../types';
 import { calculateGroupStandings, generateRoundRobinMatches } from '../utils/tournamentHelpers';
-import { Award, Check, Eye, Edit3, Circle, ClipboardCheck, Trophy, RefreshCw, X, AlertCircle, Play, Sparkles } from 'lucide-react';
+import { checkRoundRobinLockStatus, inspectRoundRobinMatches } from '../services/matchService';
+import { checkDivisionGroupLockStatus, validateAndCleanGroups } from '../services/groupService';
+import {
+  Award,
+  Check,
+  Eye,
+  Edit3,
+  Circle,
+  ClipboardCheck,
+  Trophy,
+  RefreshCw,
+  X,
+  AlertCircle,
+  Play,
+  Sparkles,
+  Lock,
+  ShieldAlert,
+  RotateCcw,
+  Trash2,
+  Info,
+  AlertTriangle,
+  FileText,
+  CheckCircle2,
+  Sliders
+} from 'lucide-react';
 
 interface DivisionRoundRobinProps {
   division: Division;
@@ -28,7 +52,37 @@ export default function DivisionRoundRobin({ division, onUpdateDivision, isAdmin
   const [score2, setScore2] = useState<number | string>('');
   const [matchStatus, setMatchStatus] = useState<'belum_dimainkan' | 'selesai' | 'walkover'>('selesai');
   const [walkoverWinner, setWalkoverWinner] = useState<string>('');
+  const [woReasonCategory, setWoReasonCategory] = useState<string>('cedera');
+  const [woCustomReason, setWoCustomReason] = useState<string>('');
 
+  // Admin Single Match Correction / Force Majeure Modal State
+  const [correctionMatch, setCorrectionMatch] = useState<Match | null>(null);
+  const [korReasonCategory, setKorReasonCategory] = useState<string>('keputusan_panitia');
+  const [korCustomReason, setKorCustomReason] = useState<string>('');
+  const [korActionType, setKorActionType] = useState<'update_score' | 'mark_walkover' | 'reset_match'>('update_score');
+  const [korScore1, setKorScore1] = useState<number | string>('');
+  const [korScore2, setKorScore2] = useState<number | string>('');
+  const [korWinnerId, setKorWinnerId] = useState<string>('');
+
+  // Single Match Reset State
+  const [resetSingleMatchItem, setResetSingleMatchItem] = useState<Match | null>(null);
+  const [resetSingleReasonCategory, setResetSingleReasonCategory] = useState<string>('kesalahan_input');
+  const [resetSingleCustomReason, setResetSingleCustomReason] = useState<string>('');
+
+  // Reset All Group Results Modal State
+  const [showResetAllResultsModal, setShowResetAllResultsModal] = useState(false);
+  const [resetAllResultsCategory, setResetAllResultsCategory] = useState<string>('koreksi_total');
+  const [resetAllResultsCustomReason, setResetAllResultsCustomReason] = useState<string>('');
+
+  // Reset Schedule and All Group Results Modal State
+  const [showResetScheduleModal, setShowResetScheduleModal] = useState(false);
+  const [resetScheduleCategory, setResetScheduleCategory] = useState<string>('perubahan_grup');
+  const [resetScheduleCustomReason, setResetScheduleCustomReason] = useState<string>('');
+
+  // Integrity Modal State
+  const [showIntegrityModal, setShowIntegrityModal] = useState(false);
+
+  // General Confirmation & Alert Popups
   const [showConfirm, setShowConfirm] = useState<{
     title: string;
     message: string;
@@ -40,22 +94,128 @@ export default function DivisionRoundRobin({ division, onUpdateDivision, isAdmin
     message: string;
   } | null>(null);
 
-  // Generate matches if groups exist
+  // Check locks
+  const lockStatus = checkRoundRobinLockStatus(division);
+  const groupLock = checkDivisionGroupLockStatus(division);
+  const anomalies = inspectRoundRobinMatches(division);
+
+  // Generate matches safely with PAINDO-005B & PAINDO-006 lock checks
   const handleGenerateMatchesDirectly = () => {
-    if (groups.length === 0) return;
-    let allMatches: Match[] = [];
-    groups.forEach(g => {
-      const groupMatches = generateRoundRobinMatches(division.id, g, entries);
-      allMatches = [...allMatches, ...groupMatches];
-    });
-    onUpdateDivision({
-      ...division,
-      roundRobinMatches: allMatches
-    });
+    if (lockStatus.isLocked) {
+      setShowAlert({
+        title: 'Jadwal Terkunci 🔒',
+        message: lockStatus.reason
+      });
+      return;
+    }
+
+    if (groups.length === 0) {
+      setShowAlert({
+        title: 'Belum Ada Grup ⚠️',
+        message: 'Belum ada grup yang dibentuk pada divisi ini. Silakan buat grup di tab Pembagian Grup terlebih dahulu.'
+      });
+      return;
+    }
+
+    const groupValResult = validateAndCleanGroups(groups, entries);
+
+    if (groupValResult.unassignedEntries.length > 0) {
+      setShowAlert({
+        title: 'Pembagian Grup Belum Selesai ⚠️',
+        message: `Masih terdapat ${groupValResult.unassignedEntries.length} peserta yang belum dimasukkan ke dalam grup. Selesaikan pembagian grup terlebih dahulu.`
+      });
+      return;
+    }
+
+    if (groupLock.hasScores) {
+      setShowAlert({
+        title: 'Jadwal Terkunci 🔒',
+        message: 'Jadwal terkunci karena sudah terdapat pertandingan dengan skor/hasil terisi.'
+      });
+      return;
+    }
+
+    const doGenerate = () => {
+      const { cleanedGroups } = validateAndCleanGroups(groups, entries);
+      const groupMatchesList: Match[][] = [];
+
+      cleanedGroups.forEach(g => {
+        const validEntryIds = g.entryIds.filter(id => entries.some(e => e.id === id));
+        const matches: Match[] = [];
+        let matchIndex = 1;
+
+        for (let i = 0; i < validEntryIds.length; i++) {
+          for (let j = i + 1; j < validEntryIds.length; j++) {
+            matches.push({
+              id: `rr-${division.id}-${g.id}-${matchIndex++}`,
+              divisionId: division.id,
+              groupName: g.name,
+              type: 'ROUND_ROBIN',
+              entryId1: validEntryIds[i],
+              entryId2: validEntryIds[j],
+              score1: null,
+              score2: null,
+              status: 'belum_dimainkan'
+            });
+          }
+        }
+        groupMatchesList.push(matches);
+      });
+
+      // Interleave matches across groups for smooth match rotation
+      const interleaved: Match[] = [];
+      let maxLen = 0;
+      groupMatchesList.forEach(mList => {
+        if (mList.length > maxLen) maxLen = mList.length;
+      });
+
+      for (let roundIdx = 0; roundIdx < maxLen; roundIdx++) {
+        groupMatchesList.forEach(mList => {
+          if (mList[roundIdx]) {
+            interleaved.push({
+              ...mList[roundIdx],
+              matchNum: interleaved.length + 1
+            });
+          }
+        });
+      }
+
+      onUpdateDivision({
+        ...division,
+        groups: cleanedGroups,
+        roundRobinMatches: interleaved
+      });
+
+      setShowAlert({
+        title: 'Jadwal Round Robin Berhasil Dibuat ✅',
+        message: `Berhasil membuat ${interleaved.length} pertandingan dari ${cleanedGroups.length} grup. Setiap pasangan peserta bertemu tepat satu kali.`
+      });
+    };
+
+    if (roundRobinMatches.length > 0) {
+      setShowConfirm({
+        title: 'Konfirmasi Generate Ulang Jadwal',
+        message: 'Jadwal pertandingan fase grup sudah ada. Apakah Anda yakin ingin meng-generate ulang jadwal? (Susunan grup dan peserta tetap dipertahankan).',
+        onConfirm: () => {
+          setShowConfirm(null);
+          doGenerate();
+        }
+      });
+    } else {
+      doGenerate();
+    }
   };
 
   // Generate groups automatically & create round-robin matches
   const handleGenerateGroupsAndMatches = () => {
+    if (lockStatus.isLocked) {
+      setShowAlert({
+        title: 'Fitur Terkunci 🔒',
+        message: lockStatus.reason
+      });
+      return;
+    }
+
     if (entries.length === 0) {
       setShowAlert({
         title: 'Tidak Ada Peserta',
@@ -82,18 +242,40 @@ export default function DivisionRoundRobin({ division, onUpdateDivision, isAdmin
       newGroups[targetIdx].entryIds.push(entry.id);
     });
 
-    let allMatches: Match[] = [];
+    const groupMatchesList: Match[][] = [];
     newGroups.forEach(g => {
       const groupMatches = generateRoundRobinMatches(division.id, g, entries);
-      allMatches = [...allMatches, ...groupMatches];
+      groupMatchesList.push(groupMatches);
     });
+
+    const interleaved: Match[] = [];
+    let maxLen = 0;
+    groupMatchesList.forEach(mList => {
+      if (mList.length > maxLen) maxLen = mList.length;
+    });
+
+    for (let roundIdx = 0; roundIdx < maxLen; roundIdx++) {
+      groupMatchesList.forEach(mList => {
+        if (mList[roundIdx]) {
+          interleaved.push({
+            ...mList[roundIdx],
+            matchNum: interleaved.length + 1
+          });
+        }
+      });
+    }
 
     onUpdateDivision({
       ...division,
       groups: newGroups,
-      roundRobinMatches: allMatches,
+      roundRobinMatches: interleaved,
       knockoutStage: null,
       champions: null
+    });
+
+    setShowAlert({
+      title: 'Grup & Jadwal Berhasil Dibuat 🎯',
+      message: `Berhasil membentuk ${newGroups.length} grup dan ${interleaved.length} pertandingan round robin.`
     });
   };
 
@@ -105,11 +287,21 @@ export default function DivisionRoundRobin({ division, onUpdateDivision, isAdmin
 
   // Open scoring modal
   const openScoringModal = (match: Match) => {
+    if (lockStatus.isLocked) {
+      setShowAlert({
+        title: 'Input Skor Terkunci 🔒',
+        message: lockStatus.reason
+      });
+      return;
+    }
+
     setScoringMatch(match);
     setScore1(match.score1 ?? '');
     setScore2(match.score2 ?? '');
     setMatchStatus(match.status === 'belum_dimainkan' ? 'selesai' : match.status);
     setWalkoverWinner(match.winnerId || match.entryId1 || '');
+    setWoReasonCategory(match.notes ? 'lainnya' : 'cedera');
+    setWoCustomReason(match.notes || '');
   };
 
   // Close scoring modal
@@ -117,7 +309,14 @@ export default function DivisionRoundRobin({ division, onUpdateDivision, isAdmin
     setScoringMatch(null);
   };
 
-  const executeCommitScore = (fs1: number, fs2: number, status: typeof matchStatus, wId: string | null, lId: string | null) => {
+  const executeCommitScore = (
+    fs1: number | null,
+    fs2: number | null,
+    status: typeof matchStatus,
+    wId: string | null,
+    lId: string | null,
+    notes?: string
+  ) => {
     const updatedMatches = roundRobinMatches.map(m => {
       if (m.id === scoringMatch!.id) {
         return {
@@ -126,7 +325,8 @@ export default function DivisionRoundRobin({ division, onUpdateDivision, isAdmin
           score2: fs2,
           status,
           winnerId: wId,
-          loserId: lId
+          loserId: lId,
+          notes
         };
       }
       return m;
@@ -140,18 +340,35 @@ export default function DivisionRoundRobin({ division, onUpdateDivision, isAdmin
     setScoringMatch(null);
   };
 
-  // Save scores
+  // Save scores with integer, Win-by-2, Walkover & non-equal validations
   const saveScore = (e: React.FormEvent) => {
     e.preventDefault();
     if (!scoringMatch) return;
 
-    let finalScore1 = 0;
-    let finalScore2 = 0;
+    if (lockStatus.isLocked) {
+      setShowAlert({
+        title: 'Perubahan Terkunci 🔒',
+        message: lockStatus.reason
+      });
+      return;
+    }
+
+    let finalScore1: number | null = 0;
+    let finalScore2: number | null = 0;
     let winnerId: string | null = null;
     let loserId: string | null = null;
+    let finalNotes: string | undefined = undefined;
 
     if (matchStatus === 'walkover') {
-      const targetScore = settings.targetScore;
+      if (!walkoverWinner) {
+        setShowAlert({
+          title: 'Pilih Pemenang WO ⚠️',
+          message: 'Silakan pilih peserta yang dinyatakan menang Walkover (WO).'
+        });
+        return;
+      }
+
+      const targetScore = settings.targetScore || 11;
       if (walkoverWinner === scoringMatch.entryId1) {
         finalScore1 = targetScore;
         finalScore2 = 0;
@@ -163,41 +380,82 @@ export default function DivisionRoundRobin({ division, onUpdateDivision, isAdmin
         winnerId = scoringMatch.entryId2;
         loserId = scoringMatch.entryId1;
       }
-      executeCommitScore(finalScore1, finalScore2, matchStatus, winnerId, loserId);
-    } else {
-      finalScore1 = parseInt(String(score1)) || 0;
-      finalScore2 = parseInt(String(score2)) || 0;
 
-      if (finalScore1 === finalScore2) {
+      const reasonText = woReasonCategory === 'lainnya'
+        ? woCustomReason.trim()
+        : {
+            cedera: 'Cedera Peserta',
+            mengundurkan_diri: 'Mengundurkan Diri Peserta',
+            diskualifikasi: 'Diskualifikasi oleh Panitia',
+            ketidakhadiran: 'Ketidakhadiran / Walkover (WO)',
+            gangguan_teknis: 'Gangguan Teknis Lapangan',
+            cuaca: 'Kondisi Cuaca',
+            keputusan_panitia: 'Keputusan Panitia / Force Majeure'
+          }[woReasonCategory] || woReasonCategory;
+
+      if (woReasonCategory === 'lainnya' && !reasonText) {
         setShowAlert({
-          title: 'Skor Seri',
-          message: 'Skor seri tidak diperbolehkan dalam Pickleball. Harus ada pemenang.'
+          title: 'Alasan WO Wajib Diisi ⚠️',
+          message: 'Silakan tuliskan alasan rincian Walkover / Force Majeure.'
         });
         return;
       }
+
+      finalNotes = `Walkover (WO) - ${reasonText}`;
+
+      executeCommitScore(finalScore1, finalScore2, 'walkover', winnerId, loserId, finalNotes);
+    } else {
+      const s1Num = Number(score1);
+      const s2Num = Number(score2);
+
+      if (score1 === '' || score2 === '' || isNaN(s1Num) || isNaN(s2Num)) {
+        setShowAlert({
+          title: 'Skor Wajib Diisi ⚠️',
+          message: 'Kedua skor wajib diisi dengan angka bulat non-negatif.'
+        });
+        return;
+      }
+
+      if (s1Num < 0 || s2Num < 0 || !Number.isInteger(s1Num) || !Number.isInteger(s2Num)) {
+        setShowAlert({
+          title: 'Skor Tidak Valid ⚠️',
+          message: 'Skor harus berupa bilangan bulat non-negatif (0 atau lebih besar).'
+        });
+        return;
+      }
+
+      if (s1Num === s2Num) {
+        setShowAlert({
+          title: 'Skor Seri Tidak Diperbolehkan ⚠️',
+          message: 'Skor seri tidak diperbolehkan. Harus ada pemenang dalam pertandingan.'
+        });
+        return;
+      }
+
+      finalScore1 = s1Num;
+      finalScore2 = s2Num;
 
       // Check win-by-2 condition
       if (settings.winByTwo) {
         const diff = Math.abs(finalScore1 - finalScore2);
         const maxScore = Math.max(finalScore1, finalScore2);
-        
-        // If maxScore is less than target
+
         if (maxScore < settings.targetScore) {
           setShowConfirm({
             title: 'Simpan Skor di Bawah Target',
-            message: `Skor tertinggi (${maxScore}) kurang dari target poin (${settings.targetScore}). Apakah Anda ingin tetap menyimpannya?`,
+            message: `Skor tertinggi (${maxScore}) kurang dari target poin (${settings.targetScore}). Apakah Anda yakin ingin menyimpan hasil ini?`,
             onConfirm: () => {
-              const wId = finalScore1 > finalScore2 ? scoringMatch.entryId1 : scoringMatch.entryId2;
-              const lId = finalScore1 > finalScore2 ? scoringMatch.entryId2 : scoringMatch.entryId1;
-              executeCommitScore(finalScore1, finalScore2, matchStatus, wId, lId);
+              const wId = finalScore1! > finalScore2! ? scoringMatch.entryId1 : scoringMatch.entryId2;
+              const lId = finalScore1! > finalScore2! ? scoringMatch.entryId2 : scoringMatch.entryId1;
+              executeCommitScore(finalScore1, finalScore2, 'selesai', wId, lId, undefined);
               setShowConfirm(null);
             }
           });
           return;
         } else if (maxScore > settings.targetScore && diff < 2) {
           setShowAlert({
-            title: 'Aturan Win by 2',
-            message: `Game harus dimenangkan dengan selisih minimal 2 poin (Win by 2) saat mencapai target poin.`
+            title: 'Aturan Win by 2 ⚠️',
+            message: `Game harus dimenangkan dengan selisih minimal 2 poin (Win by 2) saat mencapai/melampaui target poin.`
           });
           return;
         }
@@ -211,33 +469,360 @@ export default function DivisionRoundRobin({ division, onUpdateDivision, isAdmin
         loserId = scoringMatch.entryId1;
       }
 
-      executeCommitScore(finalScore1, finalScore2, matchStatus, winnerId, loserId);
+      executeCommitScore(finalScore1, finalScore2, 'selesai', winnerId, loserId, undefined);
     }
   };
 
-  // Reset scores for a match
-  const resetMatchScore = (matchId: string) => {
+  // Single Match Admin Correction Modal Handler
+  const openCorrectionModal = (match: Match) => {
+    if (lockStatus.isLocked) {
+      setShowAlert({
+        title: 'Koreksi Terkunci 🔒',
+        message: lockStatus.reason
+      });
+      return;
+    }
+
+    setCorrectionMatch(match);
+    setKorReasonCategory('keputusan_panitia');
+    setKorCustomReason('');
+    setKorActionType(match.status === 'walkover' ? 'mark_walkover' : 'update_score');
+    setKorScore1(match.score1 ?? '');
+    setKorScore2(match.score2 ?? '');
+    setKorWinnerId(match.winnerId || match.entryId1 || '');
+  };
+
+  const executeAdminCorrection = () => {
+    if (!correctionMatch) return;
+
+    if (lockStatus.isLocked) {
+      setShowAlert({ title: 'Koreksi Terkunci 🔒', message: lockStatus.reason });
+      return;
+    }
+
+    const finalReason = korReasonCategory === 'lainnya'
+      ? korCustomReason.trim()
+      : {
+          cedera: 'Cedera / Mengundurkan Diri Peserta',
+          diskualifikasi: 'Diskualifikasi Peserta oleh Panitia',
+          ketidakhadiran: 'Ketidakhadiran / Walkover (WO)',
+          cuaca_teknis: 'Gangguan Teknis / Kondisi Cuaca',
+          keputusan_panitia: 'Keputusan Panitia / Force Majeure'
+        }[korReasonCategory] || korReasonCategory;
+
+    if (korReasonCategory === 'lainnya' && !finalReason) {
+      setShowAlert({
+        title: 'Alasan Wajib Diisi ⚠️',
+        message: 'Silakan ketik alasan khusus untuk koreksi hasil pertandingan ini.'
+      });
+      return;
+    }
+
+    let updatedMatches: Match[] = [];
+
+    if (korActionType === 'reset_match') {
+      updatedMatches = roundRobinMatches.map(m => {
+        if (m.id === correctionMatch.id) {
+          return {
+            ...m,
+            score1: null,
+            score2: null,
+            status: 'belum_dimainkan' as const,
+            winnerId: null,
+            loserId: null,
+            notes: undefined
+          };
+        }
+        return m;
+      });
+      setShowAlert({
+        title: 'Koreksi Admin Berhasil ✅',
+        message: `Pertandingan ${getEntryLabel(correctionMatch.entryId1)} vs ${getEntryLabel(correctionMatch.entryId2)} di-reset menjadi Belum Dimainkan. Alasan: ${finalReason}.`
+      });
+    } else if (korActionType === 'mark_walkover') {
+      const targetScore = settings.targetScore || 11;
+      const wId = korWinnerId || correctionMatch.entryId1;
+      const lId = wId === correctionMatch.entryId1 ? correctionMatch.entryId2 : correctionMatch.entryId1;
+      const s1 = wId === correctionMatch.entryId1 ? targetScore : 0;
+      const s2 = wId === correctionMatch.entryId1 ? 0 : targetScore;
+
+      updatedMatches = roundRobinMatches.map(m => {
+        if (m.id === correctionMatch.id) {
+          return {
+            ...m,
+            score1: s1,
+            score2: s2,
+            status: 'walkover' as const,
+            winnerId: wId,
+            loserId: lId,
+            notes: `Koreksi Admin (WO) - ${finalReason}`
+          };
+        }
+        return m;
+      });
+
+      setShowAlert({
+        title: 'Koreksi Walkover Berhasil ✅',
+        message: `Pertandingan ditandai Walkover dengan pemenang ${getEntryLabel(wId)}. Alasan: ${finalReason}.`
+      });
+    } else {
+      const s1Num = Number(korScore1);
+      const s2Num = Number(korScore2);
+
+      if (korScore1 === '' || korScore2 === '' || isNaN(s1Num) || isNaN(s2Num) || s1Num < 0 || s2Num < 0 || !Number.isInteger(s1Num) || !Number.isInteger(s2Num)) {
+        setShowAlert({
+          title: 'Skor Tidak Valid ⚠️',
+          message: 'Kedua skor koreksi wajib berupa bilangan bulat non-negatif.'
+        });
+        return;
+      }
+
+      if (s1Num === s2Num) {
+        setShowAlert({
+          title: 'Skor Seri Tidak Valid ⚠️',
+          message: 'Skor seri tidak diperbolehkan. Harus ada pemenang.'
+        });
+        return;
+      }
+
+      const wId = s1Num > s2Num ? correctionMatch.entryId1 : correctionMatch.entryId2;
+      const lId = s1Num > s2Num ? correctionMatch.entryId2 : correctionMatch.entryId1;
+
+      updatedMatches = roundRobinMatches.map(m => {
+        if (m.id === correctionMatch.id) {
+          return {
+            ...m,
+            score1: s1Num,
+            score2: s2Num,
+            status: 'selesai' as const,
+            winnerId: wId,
+            loserId: lId,
+            notes: `Koreksi Admin - ${finalReason}`
+          };
+        }
+        return m;
+      });
+
+      setShowAlert({
+        title: 'Koreksi Skor Berhasil ✅',
+        message: `Skor pertandingan diperbarui menjadi ${s1Num} - ${s2Num} (Pemenang: ${getEntryLabel(wId)}). Alasan: ${finalReason}.`
+      });
+    }
+
+    onUpdateDivision({
+      ...division,
+      roundRobinMatches: updatedMatches
+    });
+
+    setCorrectionMatch(null);
+  };
+
+  // Open single match reset modal
+  const openResetSingleMatchModal = (match: Match) => {
+    if (lockStatus.isLocked) {
+      setShowAlert({
+        title: 'Aksi Terkunci 🔒',
+        message: lockStatus.reason
+      });
+      return;
+    }
+
+    setResetSingleMatchItem(match);
+    setResetSingleReasonCategory('kesalahan_input');
+    setResetSingleCustomReason('');
+  };
+
+  const executeResetSingleMatch = () => {
+    if (!resetSingleMatchItem) return;
+
+    if (lockStatus.isLocked) {
+      setShowAlert({ title: 'Aksi Terkunci 🔒', message: lockStatus.reason });
+      return;
+    }
+
+    const finalReason = resetSingleReasonCategory === 'lainnya'
+      ? resetSingleCustomReason.trim()
+      : {
+          kesalahan_input: 'Kesalahan Input Skor',
+          diskualifikasi: 'Diskualifikasi / Keputusan Panitia',
+          perubahan_jadwal: 'Penjadwalan Ulang Match',
+          keputusan_panitia: 'Keputusan Panitia / Force Majeure'
+        }[resetSingleReasonCategory] || resetSingleReasonCategory;
+
+    if (resetSingleReasonCategory === 'lainnya' && !finalReason) {
+      setShowAlert({
+        title: 'Alasan Wajib Diisi ⚠️',
+        message: 'Silakan ketik alasan khusus reset pertandingan ini.'
+      });
+      return;
+    }
+
+    const updatedMatches = roundRobinMatches.map(m => {
+      if (m.id === resetSingleMatchItem.id) {
+        return {
+          ...m,
+          score1: null,
+          score2: null,
+          status: 'belum_dimainkan' as const,
+          winnerId: null,
+          loserId: null,
+          notes: undefined
+        };
+      }
+      return m;
+    });
+
+    onUpdateDivision({
+      ...division,
+      roundRobinMatches: updatedMatches
+    });
+
+    setShowAlert({
+      title: 'Hasil Pertandingan Berhasil Direset ✅',
+      message: `Skor dan pemenang untuk ${getEntryLabel(resetSingleMatchItem.entryId1)} vs ${getEntryLabel(resetSingleMatchItem.entryId2)} telah dikosongkan. Alasan: ${finalReason}.`
+    });
+
+    setResetSingleMatchItem(null);
+  };
+
+  // Reset All Group Results
+  const executeResetAllResults = () => {
+    if (lockStatus.isLocked) {
+      setShowAlert({ title: 'Aksi Terkunci 🔒', message: lockStatus.reason });
+      return;
+    }
+
+    const finalReason = resetAllResultsCategory === 'lainnya'
+      ? resetAllResultsCustomReason.trim()
+      : {
+          koreksi_total: 'Koreksi Total Hasil Fase Grup',
+          perubahan_skema: 'Perubahan Skema Turnamen / Force Majeure',
+          gangguan_teknis: 'Gangguan Sistem / Hasil Tidak Valid',
+          keputusan_panitia: 'Keputusan Panitia'
+        }[resetAllResultsCategory] || resetAllResultsCategory;
+
+    if (resetAllResultsCategory === 'lainnya' && !finalReason) {
+      setShowAlert({ title: 'Alasan Wajib Diisi ⚠️', message: 'Tuliskan alasan khusus reset seluruh hasil.' });
+      return;
+    }
+
+    const resetMatches = roundRobinMatches.map(m => ({
+      ...m,
+      score1: null,
+      score2: null,
+      status: 'belum_dimainkan' as const,
+      winnerId: null,
+      loserId: null,
+      notes: undefined
+    }));
+
+    onUpdateDivision({
+      ...division,
+      roundRobinMatches: resetMatches
+    });
+
+    setShowAlert({
+      title: 'Seluruh Hasil Fase Grup Berhasil Direset ✅',
+      message: `Tindakan (${finalReason}): Seluruh skor dari ${resetMatches.length} pertandingan round-robin telah dikosongkan. Jadwal dan susunan grup dipertahankan.`
+    });
+
+    setShowResetAllResultsModal(false);
+  };
+
+  // Reset Schedule & All Group Results
+  const executeResetScheduleAndResults = () => {
+    if (lockStatus.isLocked) {
+      setShowAlert({ title: 'Aksi Terkunci 🔒', message: lockStatus.reason });
+      return;
+    }
+
+    const finalReason = resetScheduleCategory === 'lainnya'
+      ? resetScheduleCustomReason.trim()
+      : {
+          perubahan_grup: 'Perubahan Susunan Grup / Peserta',
+          generate_ulang: 'Permintaan Generate Ulang Jadwal',
+          keputusan_panitia: 'Keputusan Panitia / Force Majeure'
+        }[resetScheduleCategory] || resetScheduleCategory;
+
+    if (resetScheduleCategory === 'lainnya' && !finalReason) {
+      setShowAlert({ title: 'Alasan Wajib Diisi ⚠️', message: 'Tuliskan alasan khusus reset jadwal.' });
+      return;
+    }
+
+    onUpdateDivision({
+      ...division,
+      roundRobinMatches: []
+    });
+
+    setShowAlert({
+      title: 'Jadwal & Hasil Fase Grup Berhasil Direset ✅',
+      message: `Tindakan (${finalReason}): Seluruh jadwal (${roundRobinMatches.length} pertandingan) dan skor fase grup telah dihapus. Peserta dan susunan grup dipertahankan.`
+    });
+
+    setShowResetScheduleModal(false);
+  };
+
+  // Clean / Fix Match Integrity
+  const handleFixMatchIntegrity = () => {
+    if (lockStatus.isLocked) {
+      setShowAlert({ title: 'Aksi Terkunci 🔒', message: lockStatus.reason });
+      return;
+    }
+
     setShowConfirm({
-      title: 'Hapus Hasil Pertandingan',
-      message: 'Apakah Anda yakin ingin menghapus hasil pertandingan ini?',
+      title: 'Koreksi Otomatis Integrasi Jadwal',
+      message: 'Sistem akan merapikan match duplikat, memperbaiki winnerId yang tidak sesuai dengan skor, dan menyusun ulang nomor pertandingan. Apakah Anda yakin ingin melanjutkannya?',
       onConfirm: () => {
-        const updatedMatches = roundRobinMatches.map(m => {
-          if (m.id === matchId) {
-            return {
-              ...m,
-              score1: null,
-              score2: null,
-              status: 'belum_dimainkan' as const,
-              winnerId: null,
-              loserId: null
-            };
+        const seenPairs = new Set<string>();
+        const seenIds = new Set<string>();
+        const cleanedMatches: Match[] = [];
+
+        (roundRobinMatches || []).forEach(m => {
+          if (!m.id || seenIds.has(m.id)) return;
+          if (!m.entryId1 || !m.entryId2) return;
+          if (m.entryId1 === m.entryId2) return;
+
+          const pairKey = [m.entryId1, m.entryId2].sort().join('::');
+          if (seenPairs.has(pairKey)) return;
+
+          seenIds.add(m.id);
+          seenPairs.add(pairKey);
+
+          let fixedScore1 = m.score1;
+          let fixedScore2 = m.score2;
+          let fixedWinnerId = m.winnerId;
+          let fixedLoserId = m.loserId;
+          let fixedStatus = m.status;
+
+          if (fixedStatus === 'selesai' && fixedScore1 !== null && fixedScore2 !== null) {
+            if (fixedScore1 > fixedScore2) {
+              fixedWinnerId = m.entryId1;
+              fixedLoserId = m.entryId2;
+            } else if (fixedScore2 > fixedScore1) {
+              fixedWinnerId = m.entryId2;
+              fixedLoserId = m.entryId1;
+            }
           }
-          return m;
+
+          cleanedMatches.push({
+            ...m,
+            score1: fixedScore1,
+            score2: fixedScore2,
+            winnerId: fixedWinnerId,
+            loserId: fixedLoserId,
+            status: fixedStatus,
+            matchNum: cleanedMatches.length + 1
+          });
         });
 
         onUpdateDivision({
           ...division,
-          roundRobinMatches: updatedMatches
+          roundRobinMatches: cleanedMatches
+        });
+
+        setShowAlert({
+          title: 'Integritas Berhasil Diperbaiki ✅',
+          message: `Berhasil merapikan ${cleanedMatches.length} pertandingan fase grup.`
         });
         setShowConfirm(null);
       }
@@ -255,7 +840,6 @@ export default function DivisionRoundRobin({ division, onUpdateDivision, isAdmin
         const mNorm = m.groupName.replace(/^(grup|pool)\s+/i, '').trim().toLowerCase();
         if (selNorm === mNorm) groupMatch = true;
       }
-      // Fallback check by entry membership if selectedGroupFilter is a group name
       if (!groupMatch) {
         const targetGrp = groups.find(g => g.name === selectedGroupFilter);
         if (targetGrp && m.entryId1 && m.entryId2 && targetGrp.entryIds.includes(m.entryId1) && targetGrp.entryIds.includes(m.entryId2)) {
@@ -278,7 +862,54 @@ export default function DivisionRoundRobin({ division, onUpdateDivision, isAdmin
   };
 
   return (
-    <div className="space-y-8 animate-fade-in" id="division-round-robin-panel">
+    <div className="space-y-6 animate-fade-in" id="division-round-robin-panel">
+
+      {/* STATUS BANNER IF LOCKED */}
+      {lockStatus.isLocked && (
+        <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-xs" id="round-robin-locked-banner">
+          <div className="flex items-start gap-3">
+            <Lock className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
+            <div className="space-y-1 text-xs">
+              <h4 className="font-extrabold text-amber-900">Perubahan Fase Grup Terkunci 🔒</h4>
+              <p className="text-amber-800 leading-relaxed">{lockStatus.reason}</p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* INTEGRITY ALERT BANNER */}
+      {anomalies.hasAnomalies && (
+        <div className="bg-rose-50 border border-rose-200 rounded-2xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-xs" id="integrity-alert-banner">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="h-5 w-5 text-rose-600 shrink-0 mt-0.5" />
+            <div className="space-y-1 text-xs">
+              <h4 className="font-extrabold text-rose-900">Integritas Jadwal & Skor Memerlukan Perhatian ⚠️</h4>
+              <p className="text-rose-800 leading-relaxed">
+                Terdeteksi {anomalies.warnings.length} ketidaksesuaian data pada pertandingan fase grup.
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => setShowIntegrityModal(true)}
+              className="px-3 py-1.5 rounded-xl text-xs font-bold text-rose-700 bg-white border border-rose-200 hover:bg-rose-100 transition"
+            >
+              Lihat Rincian ({anomalies.warnings.length})
+            </button>
+            {isAdmin && !lockStatus.isLocked && (
+              <button
+                type="button"
+                onClick={handleFixMatchIntegrity}
+                className="px-3 py-1.5 rounded-xl text-xs font-extrabold text-white bg-rose-600 hover:bg-rose-700 transition"
+              >
+                Koreksi Otomatis
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
       {roundRobinMatches.length === 0 ? (
         <div className="text-center py-16 bg-white rounded-2xl border border-slate-150 p-8 card-shadow space-y-5" id="empty-rr-matches">
           <div className="w-16 h-16 bg-navy/5 text-navy rounded-full flex items-center justify-center mx-auto border border-navy/10">
@@ -296,7 +927,11 @@ export default function DivisionRoundRobin({ division, onUpdateDivision, isAdmin
               <button
                 type="button"
                 onClick={handleGenerateMatchesDirectly}
-                className="px-5 py-2.5 bg-navy hover:bg-navy-light text-neon rounded-xl font-black text-xs flex items-center gap-2 transition card-shadow shadow-xs hover:-translate-y-0.5"
+                disabled={lockStatus.isLocked}
+                className={`px-5 py-2.5 bg-navy hover:bg-navy-light text-neon rounded-xl font-black text-xs flex items-center gap-2 transition card-shadow shadow-xs hover:-translate-y-0.5 ${
+                  lockStatus.isLocked ? 'opacity-50 cursor-not-allowed' : ''
+                }`}
+                id="btn-generate-matches-rr"
               >
                 <Play className="h-4 w-4 fill-neon" /> Generate Jadwal Match dari {groups.length} Pool
               </button>
@@ -306,7 +941,10 @@ export default function DivisionRoundRobin({ division, onUpdateDivision, isAdmin
               <button
                 type="button"
                 onClick={handleGenerateGroupsAndMatches}
-                className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-extrabold text-xs flex items-center gap-2 transition card-shadow shadow-xs hover:-translate-y-0.5"
+                disabled={lockStatus.isLocked}
+                className={`px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-extrabold text-xs flex items-center gap-2 transition card-shadow shadow-xs hover:-translate-y-0.5 ${
+                  lockStatus.isLocked ? 'opacity-50 cursor-not-allowed' : ''
+                }`}
                 title="Bagi seluruh peserta terdaftar ke dalam grup & buat jadwal pertandingan secara otomatis"
                 id="btn-generate-groups-rr"
               >
@@ -411,13 +1049,55 @@ export default function DivisionRoundRobin({ division, onUpdateDivision, isAdmin
           {/* COLUMN KANAN: PERTANDINGAN ROUND ROBIN (XL: 7/12) */}
           <div className="xl:col-span-7 space-y-4" id="matches-column">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-2">
-              <h3 className="text-base font-extrabold text-navy flex items-center gap-1.5">
-                <ClipboardCheck className="h-5 w-5 text-neon stroke-navy fill-neon" />
-                Pertandingan Fase Grup
-              </h3>
+              <div>
+                <h3 className="text-base font-extrabold text-navy flex items-center gap-1.5">
+                  <ClipboardCheck className="h-5 w-5 text-neon stroke-navy fill-neon" />
+                  Pertandingan Fase Grup ({roundRobinMatches.length})
+                </h3>
+                <p className="text-[11px] text-slate-500 mt-0.5">
+                  Total pertandingan sesuai rumus $N(N-1)/2$. Setiap pasangan bertemu tepat satu kali.
+                </p>
+              </div>
 
-              {/* Filters */}
-              <div className="flex gap-2" id="rr-filters">
+              {/* Action Toolbar for Admin */}
+              {isAdmin && (
+                <div className="flex flex-wrap items-center gap-2" id="admin-rr-action-bar">
+                  <button
+                    type="button"
+                    onClick={() => setShowResetAllResultsModal(true)}
+                    disabled={lockStatus.isLocked}
+                    className={`px-3 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 rounded-xl text-xs font-extrabold flex items-center gap-1.5 transition ${
+                      lockStatus.isLocked ? 'opacity-50 cursor-not-allowed' : ''
+                    }`}
+                    title="Kosongkan seluruh skor hasil fase grup tanpa menghapus jadwal"
+                    id="btn-reset-all-results"
+                  >
+                    <RotateCcw className="h-3.5 w-3.5 text-amber-600" /> Reset Seluruh Hasil
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setShowResetScheduleModal(true)}
+                    disabled={lockStatus.isLocked}
+                    className={`px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-800 border border-rose-200 rounded-xl text-xs font-extrabold flex items-center gap-1.5 transition ${
+                      lockStatus.isLocked ? 'opacity-50 cursor-not-allowed' : ''
+                    }`}
+                    title="Hapus seluruh jadwal dan hasil fase grup"
+                    id="btn-reset-schedule"
+                  >
+                    <Trash2 className="h-3.5 w-3.5 text-rose-600" /> Reset Jadwal & Hasil
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Filters */}
+            <div className="flex flex-wrap items-center justify-between gap-2 bg-slate-50/80 p-2.5 rounded-xl border border-slate-150" id="rr-filters">
+              <div className="flex items-center gap-2 text-xs text-slate-500 font-bold">
+                <Sliders className="h-3.5 w-3.5 text-slate-400" />
+                <span>Filter Match:</span>
+              </div>
+              <div className="flex gap-2">
                 <select
                   value={selectedGroupFilter}
                   onChange={(e) => setSelectedGroupFilter(e.target.value)}
@@ -441,7 +1121,7 @@ export default function DivisionRoundRobin({ division, onUpdateDivision, isAdmin
               </div>
             </div>
 
-            <div className="space-y-3 max-h-[600px] overflow-y-auto pr-1" id="rr-matches-list">
+            <div className="space-y-3 max-h-[620px] overflow-y-auto pr-1" id="rr-matches-list">
               {filteredMatches.map(match => {
                 const isPlayed = match.status !== 'belum_dimainkan';
                 const label1 = getEntryLabel(match.entryId1);
@@ -455,7 +1135,10 @@ export default function DivisionRoundRobin({ division, onUpdateDivision, isAdmin
                   >
                     {/* Left details */}
                     <div className="space-y-1">
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="px-2 py-0.5 bg-navy text-neon text-[10px] font-black rounded">
+                          #{match.matchNum || 1}
+                        </span>
                         <span className="px-2 py-0.5 bg-slate-100 text-slate-600 text-[10px] font-bold rounded">
                           {match.groupName}
                         </span>
@@ -466,43 +1149,65 @@ export default function DivisionRoundRobin({ division, onUpdateDivision, isAdmin
                             {match.status}
                           </span>
                         )}
+                        {match.notes && (
+                          <span className="px-2 py-0.5 text-[10px] font-medium rounded bg-rose-50 text-rose-700 border border-rose-200" title={match.notes}>
+                            {match.notes}
+                          </span>
+                        )}
                       </div>
                       
                       {/* Match matchup */}
                       <div className="flex items-center gap-3 text-sm pt-1" id={`matchup-text-${match.id}`}>
-                        <span className={`font-bold ${match.winnerId === match.entryId1 ? 'text-navy font-black' : 'text-slate-600'}`}>
+                        <span className={`font-bold ${match.winnerId === match.entryId1 ? 'text-navy font-black underline decoration-emerald-500 decoration-2' : 'text-slate-600'}`}>
                           {label1}
                         </span>
                         <span className="text-xs text-slate-400 font-mono">vs</span>
-                        <span className={`font-bold ${match.winnerId === match.entryId2 ? 'text-navy font-black' : 'text-slate-600'}`}>
+                        <span className={`font-bold ${match.winnerId === match.entryId2 ? 'text-navy font-black underline decoration-emerald-500 decoration-2' : 'text-slate-600'}`}>
                           {label2}
                         </span>
                       </div>
                     </div>
 
-                    {/* Scores or Action Button */}
+                    {/* Scores or Action Buttons */}
                     <div className="flex items-center gap-3 justify-end shrink-0" id={`match-actions-${match.id}`}>
                       {isPlayed ? (
-                        <div className="flex items-center gap-4">
+                        <div className="flex items-center gap-3">
                           <div className="bg-slate-50 border border-slate-150 rounded-lg px-3 py-1 text-sm font-bold font-mono tracking-wider flex items-center gap-1.5 text-slate-700">
-                            <span>{match.score1}</span>
+                            <span>{match.score1 ?? '-'}</span>
                             <span className="text-slate-400">-</span>
-                            <span>{match.score2}</span>
+                            <span>{match.score2 ?? '-'}</span>
                           </div>
                           {isAdmin && (
-                            <div className="flex gap-1">
+                            <div className="flex items-center gap-1">
                               <button
                                 onClick={() => openScoringModal(match)}
-                                className="p-1.5 text-slate-400 hover:text-navy rounded transition bg-slate-50 border border-slate-200"
-                                title="Edit Skor"
+                                disabled={lockStatus.isLocked}
+                                className={`p-1.5 text-slate-500 hover:text-navy rounded transition bg-slate-50 border border-slate-200 ${
+                                  lockStatus.isLocked ? 'opacity-40 cursor-not-allowed' : ''
+                                }`}
+                                title="Edit Skor Pertandingan"
                                 id={`edit-score-button-${match.id}`}
                               >
                                 <Edit3 className="h-3.5 w-3.5" />
                               </button>
                               <button
-                                onClick={() => resetMatchScore(match.id)}
-                                className="p-1.5 text-slate-400 hover:text-rose-500 rounded transition bg-slate-50 border border-slate-200"
-                                title="Hapus Skor"
+                                onClick={() => openCorrectionModal(match)}
+                                disabled={lockStatus.isLocked}
+                                className={`p-1.5 text-rose-600 hover:text-rose-800 rounded transition bg-rose-50 border border-rose-200 ${
+                                  lockStatus.isLocked ? 'opacity-40 cursor-not-allowed' : ''
+                                }`}
+                                title="Koreksi Admin / Force Majeure"
+                                id={`correction-button-${match.id}`}
+                              >
+                                <ShieldAlert className="h-3.5 w-3.5" />
+                              </button>
+                              <button
+                                onClick={() => openResetSingleMatchModal(match)}
+                                disabled={lockStatus.isLocked}
+                                className={`p-1.5 text-slate-400 hover:text-rose-500 rounded transition bg-slate-50 border border-slate-200 ${
+                                  lockStatus.isLocked ? 'opacity-40 cursor-not-allowed' : ''
+                                }`}
+                                title="Reset Hasil Pertandingan Ini"
                                 id={`reset-score-button-${match.id}`}
                               >
                                 <X className="h-3.5 w-3.5" />
@@ -512,13 +1217,29 @@ export default function DivisionRoundRobin({ division, onUpdateDivision, isAdmin
                         </div>
                       ) : (
                         isAdmin ? (
-                          <button
-                            onClick={() => openScoringModal(match)}
-                            className="px-3.5 py-1.5 bg-neon/15 hover:bg-navy text-navy hover:text-neon rounded-lg border border-neon/30 hover:border-navy text-xs font-extrabold transition card-shadow"
-                            id={`score-match-button-${match.id}`}
-                          >
-                            Input Skor
-                          </button>
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={() => openScoringModal(match)}
+                              disabled={lockStatus.isLocked}
+                              className={`px-3.5 py-1.5 bg-neon/15 hover:bg-navy text-navy hover:text-neon rounded-lg border border-neon/30 hover:border-navy text-xs font-extrabold transition card-shadow ${
+                                lockStatus.isLocked ? 'opacity-40 cursor-not-allowed' : ''
+                              }`}
+                              id={`score-match-button-${match.id}`}
+                            >
+                              Input Skor
+                            </button>
+                            <button
+                              onClick={() => openCorrectionModal(match)}
+                              disabled={lockStatus.isLocked}
+                              className={`p-1.5 text-amber-700 bg-amber-50 hover:bg-amber-100 rounded-lg border border-amber-200 transition ${
+                                lockStatus.isLocked ? 'opacity-40 cursor-not-allowed' : ''
+                              }`}
+                              title="Tandai Walkover (WO) / Force Majeure"
+                              id={`wo-button-${match.id}`}
+                            >
+                              <ShieldAlert className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
                         ) : (
                           <span className="text-xs text-slate-400 bg-slate-50 px-2.5 py-1.5 rounded border border-slate-200 font-bold">
                             Belum Dimainkan
@@ -539,7 +1260,7 @@ export default function DivisionRoundRobin({ division, onUpdateDivision, isAdmin
       {/* SCORING MODAL */}
       {scoringMatch && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fade-in" id="scoring-modal">
-          <div className="bg-white rounded-2xl border border-slate-150 shadow-2xl max-w-md w-full p-6 space-y-6" id="scoring-modal-content">
+          <div className="bg-white rounded-2xl border border-slate-150 shadow-2xl max-w-md w-full p-6 space-y-5" id="scoring-modal-content">
             <div className="flex items-center justify-between pb-3 border-b border-slate-150">
               <h4 className="font-extrabold text-navy text-base">Input Hasil Pertandingan</h4>
               <button onClick={closeScoringModal} className="text-slate-400 hover:text-slate-600 p-1 rounded">
@@ -547,7 +1268,7 @@ export default function DivisionRoundRobin({ division, onUpdateDivision, isAdmin
               </button>
             </div>
 
-            <form onSubmit={saveScore} className="space-y-6">
+            <form onSubmit={saveScore} className="space-y-5">
               
               {/* Match status selector */}
               <div className="space-y-1">
@@ -580,11 +1301,11 @@ export default function DivisionRoundRobin({ division, onUpdateDivision, isAdmin
 
               {/* Matchup layout */}
               {matchStatus === 'selesai' ? (
-                <div className="space-y-4">
-                  <div className="flex items-center justify-between gap-4 p-4 rounded-xl bg-slate-50 border border-slate-150">
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between gap-4 p-3.5 rounded-xl bg-slate-50 border border-slate-150">
                     <div className="flex-1 min-w-0">
-                      <div className="text-[10px] text-navy font-extrabold mb-1">Pemain 1</div>
-                      <div className="font-extrabold text-slate-800 text-sm truncate">{getEntryLabel(scoringMatch.entryId1)}</div>
+                      <div className="text-[10px] text-navy font-extrabold mb-0.5">Peserta 1</div>
+                      <div className="font-extrabold text-slate-800 text-xs truncate">{getEntryLabel(scoringMatch.entryId1)}</div>
                     </div>
                     <input
                       type="number"
@@ -598,10 +1319,10 @@ export default function DivisionRoundRobin({ division, onUpdateDivision, isAdmin
                     />
                   </div>
 
-                  <div className="flex items-center justify-between gap-4 p-4 rounded-xl bg-slate-50 border border-slate-150">
+                  <div className="flex items-center justify-between gap-4 p-3.5 rounded-xl bg-slate-50 border border-slate-150">
                     <div className="flex-1 min-w-0">
-                      <div className="text-[10px] text-navy font-extrabold mb-1">Pemain 2</div>
-                      <div className="font-extrabold text-slate-800 text-sm truncate">{getEntryLabel(scoringMatch.entryId2)}</div>
+                      <div className="text-[10px] text-navy font-extrabold mb-0.5">Peserta 2</div>
+                      <div className="font-extrabold text-slate-800 text-xs truncate">{getEntryLabel(scoringMatch.entryId2)}</div>
                     </div>
                     <input
                       type="number"
@@ -616,42 +1337,76 @@ export default function DivisionRoundRobin({ division, onUpdateDivision, isAdmin
                   </div>
                 </div>
               ) : (
-                <div className="space-y-2 p-4 rounded-xl bg-amber-50 border border-amber-100 text-sm">
-                  <div className="flex items-center gap-1.5 text-amber-800 font-semibold text-xs mb-2">
-                    <AlertCircle className="h-4 w-4 text-amber-650" />
-                    Pilih Pemenang Walkover (WO)
+                <div className="space-y-3 p-4 rounded-xl bg-amber-50 border border-amber-200 text-xs">
+                  <div className="flex items-center gap-1.5 text-amber-900 font-extrabold">
+                    <AlertCircle className="h-4 w-4 text-amber-600" />
+                    Pilih Pemenang Walkover (WO) & Alasan
                   </div>
-                  <p className="text-xs text-amber-700 mb-3">
-                    Pihak yang menang akan otomatis mendapatkan skor <strong>{settings.targetScore}</strong> dan pihak kalah mendapatkan skor <strong>0</strong>.
+                  <p className="text-amber-800 leading-relaxed">
+                    Pemenang WO mendapatkan skor <strong>{settings.targetScore || 11}</strong> dan pihak kalah mendapatkan <strong>0</strong>.
                   </p>
 
-                  <div className="space-y-2">
-                    <button
-                      type="button"
-                      onClick={() => setWalkoverWinner(scoringMatch.entryId1 || '')}
-                      className={`w-full p-3 rounded-lg border text-left font-extrabold text-xs transition flex items-center justify-between ${
-                        walkoverWinner === scoringMatch.entryId1
-                          ? 'bg-navy text-neon border-navy card-shadow'
-                          : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
-                      }`}
-                    >
-                      <span>{getEntryLabel(scoringMatch.entryId1)} (Menang WO)</span>
-                      {walkoverWinner === scoringMatch.entryId1 && <Check className="h-4 w-4" />}
-                    </button>
+                  <div className="space-y-1.5">
+                    <label className="font-bold text-slate-700 block">Pemenang Walkover <span className="text-rose-500">*</span></label>
+                    <div className="space-y-2">
+                      <button
+                        type="button"
+                        onClick={() => setWalkoverWinner(scoringMatch.entryId1 || '')}
+                        className={`w-full p-2.5 rounded-lg border text-left font-extrabold text-xs transition flex items-center justify-between ${
+                          walkoverWinner === scoringMatch.entryId1
+                            ? 'bg-navy text-neon border-navy card-shadow'
+                            : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                        }`}
+                      >
+                        <span className="truncate">{getEntryLabel(scoringMatch.entryId1)} (Menang WO)</span>
+                        {walkoverWinner === scoringMatch.entryId1 && <Check className="h-4 w-4 shrink-0" />}
+                      </button>
 
-                    <button
-                      type="button"
-                      onClick={() => setWalkoverWinner(scoringMatch.entryId2 || '')}
-                      className={`w-full p-3 rounded-lg border text-left font-extrabold text-xs transition flex items-center justify-between ${
-                        walkoverWinner === scoringMatch.entryId2
-                          ? 'bg-navy text-neon border-navy card-shadow'
-                          : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
-                      }`}
-                    >
-                      <span>{getEntryLabel(scoringMatch.entryId2)} (Menang WO)</span>
-                      {walkoverWinner === scoringMatch.entryId2 && <Check className="h-4 w-4" />}
-                    </button>
+                      <button
+                        type="button"
+                        onClick={() => setWalkoverWinner(scoringMatch.entryId2 || '')}
+                        className={`w-full p-2.5 rounded-lg border text-left font-extrabold text-xs transition flex items-center justify-between ${
+                          walkoverWinner === scoringMatch.entryId2
+                            ? 'bg-navy text-neon border-navy card-shadow'
+                            : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                        }`}
+                      >
+                        <span className="truncate">{getEntryLabel(scoringMatch.entryId2)} (Menang WO)</span>
+                        {walkoverWinner === scoringMatch.entryId2 && <Check className="h-4 w-4 shrink-0" />}
+                      </button>
+                    </div>
                   </div>
+
+                  <div className="space-y-1 pt-1">
+                    <label className="font-bold text-slate-700 block">Kategori Alasan WO <span className="text-rose-500">*</span></label>
+                    <select
+                      value={woReasonCategory}
+                      onChange={(e) => setWoReasonCategory(e.target.value)}
+                      className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl font-semibold text-slate-800 focus:outline-none"
+                    >
+                      <option value="cedera">Cedera Peserta</option>
+                      <option value="mengundurkan_diri">Mengundurkan Diri Peserta</option>
+                      <option value="diskualifikasi">Diskualifikasi oleh Panitia</option>
+                      <option value="ketidakhadiran">Ketidakhadiran / Walkover (WO)</option>
+                      <option value="gangguan_teknis">Gangguan Teknis Lapangan</option>
+                      <option value="cuaca">Kondisi Cuaca</option>
+                      <option value="keputusan_panitia">Keputusan Panitia / Force Majeure</option>
+                      <option value="lainnya">Lainnya (Tulis alasan khusus)</option>
+                    </select>
+                  </div>
+
+                  {woReasonCategory === 'lainnya' && (
+                    <div className="space-y-1">
+                      <label className="font-bold text-slate-700 block">Rincian Alasan WO <span className="text-rose-500">*</span></label>
+                      <input
+                        type="text"
+                        value={woCustomReason}
+                        onChange={(e) => setWoCustomReason(e.target.value)}
+                        placeholder="Tuliskan rincian alasan..."
+                        className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs"
+                      />
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -677,6 +1432,492 @@ export default function DivisionRoundRobin({ division, onUpdateDivision, isAdmin
           </div>
         </div>
       )}
+
+      {/* ADMIN CORRECTION / FORCE MAJEURE MODAL */}
+      {correctionMatch && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fade-in" id="correction-modal">
+          <div className="bg-white rounded-2xl border border-slate-150 shadow-2xl max-w-lg w-full p-6 space-y-5 animate-scale-up" id="correction-modal-card">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-150">
+              <div className="flex items-center gap-2">
+                <ShieldAlert className="h-5 w-5 text-rose-600" />
+                <h3 className="text-base font-extrabold text-slate-900">Koreksi Admin / Force Majeure</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setCorrectionMatch(null)}
+                className="text-slate-400 hover:text-slate-600 transition"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="space-y-4 text-xs">
+              <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-1">
+                <span className="text-[10px] font-extrabold text-slate-500 uppercase">Pertandingan Terdampak</span>
+                <p className="font-extrabold text-slate-900 text-sm">
+                  {getEntryLabel(correctionMatch.entryId1)} vs {getEntryLabel(correctionMatch.entryId2)} ({correctionMatch.groupName})
+                </p>
+                <p className="text-[11px] text-slate-600">
+                  Status Saat Ini: <strong className="uppercase text-navy">{correctionMatch.status}</strong> | Skor: <strong>{correctionMatch.score1 ?? '-'} - {correctionMatch.score2 ?? '-'}</strong>
+                </p>
+              </div>
+
+              {/* Action Type */}
+              <div className="space-y-1.5">
+                <label className="font-bold text-slate-700 block">Tindakan Koreksi <span className="text-rose-500">*</span></label>
+                <div className="grid grid-cols-3 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setKorActionType('update_score')}
+                    className={`py-2 px-2 text-[11px] font-extrabold rounded-xl border transition ${
+                      korActionType === 'update_score'
+                        ? 'bg-navy text-neon border-navy card-shadow'
+                        : 'bg-slate-50 text-slate-700 border-slate-200'
+                    }`}
+                  >
+                    Edit Skor & Hasil
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setKorActionType('mark_walkover')}
+                    className={`py-2 px-2 text-[11px] font-extrabold rounded-xl border transition ${
+                      korActionType === 'mark_walkover'
+                        ? 'bg-amber-600 text-white border-amber-600 card-shadow'
+                        : 'bg-slate-50 text-slate-700 border-slate-200'
+                    }`}
+                  >
+                    Tandai Walkover
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setKorActionType('reset_match')}
+                    className={`py-2 px-2 text-[11px] font-extrabold rounded-xl border transition ${
+                      korActionType === 'reset_match'
+                        ? 'bg-rose-600 text-white border-rose-600 card-shadow'
+                        : 'bg-slate-50 text-slate-700 border-slate-200'
+                    }`}
+                  >
+                    Reset Hasil Match
+                  </button>
+                </div>
+              </div>
+
+              {/* Category Reason */}
+              <div className="space-y-1.5">
+                <label className="font-bold text-slate-700 block">Kategori Alasan Koreksi <span className="text-rose-500">*</span></label>
+                <select
+                  value={korReasonCategory}
+                  onChange={(e) => setKorReasonCategory(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-semibold text-slate-800 focus:outline-none"
+                >
+                  <option value="cedera">Cedera / Mengundurkan Diri Peserta</option>
+                  <option value="diskualifikasi">Diskualifikasi Peserta oleh Panitia</option>
+                  <option value="ketidakhadiran">Ketidakhadiran / Walkover (WO)</option>
+                  <option value="cuaca_teknis">Gangguan Teknis / Kondisi Cuaca</option>
+                  <option value="keputusan_panitia">Keputusan Panitia / Force Majeure</option>
+                  <option value="lainnya">Lainnya (Tulis alasan khusus)</option>
+                </select>
+              </div>
+
+              {korReasonCategory === 'lainnya' && (
+                <div className="space-y-1.5">
+                  <label className="font-bold text-slate-700 block">Detail Alasan Khusus <span className="text-rose-500">*</span></label>
+                  <input
+                    type="text"
+                    value={korCustomReason}
+                    onChange={(e) => setKorCustomReason(e.target.value)}
+                    placeholder="Tuliskan alasan khusus koreksi..."
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs"
+                  />
+                </div>
+              )}
+
+              {/* Inputs depending on action type */}
+              {korActionType === 'update_score' && (
+                <div className="grid grid-cols-2 gap-3 p-3 bg-slate-50 border border-slate-200 rounded-xl">
+                  <div>
+                    <label className="text-[10px] font-bold text-slate-500 block truncate">{getEntryLabel(correctionMatch.entryId1)}</label>
+                    <input
+                      type="number"
+                      min="0"
+                      value={korScore1}
+                      onChange={(e) => setKorScore1(e.target.value)}
+                      placeholder="Skor Baru 1"
+                      className="w-full mt-1 px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-sm font-bold font-mono"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-bold text-slate-500 block truncate">{getEntryLabel(correctionMatch.entryId2)}</label>
+                    <input
+                      type="number"
+                      min="0"
+                      value={korScore2}
+                      onChange={(e) => setKorScore2(e.target.value)}
+                      placeholder="Skor Baru 2"
+                      className="w-full mt-1 px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-sm font-bold font-mono"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {korActionType === 'mark_walkover' && (
+                <div className="space-y-1.5 p-3 bg-amber-50 border border-amber-200 rounded-xl">
+                  <label className="font-bold text-amber-900 block">Pilih Pemenang WO:</label>
+                  <select
+                    value={korWinnerId}
+                    onChange={(e) => setKorWinnerId(e.target.value)}
+                    className="w-full px-3 py-2 bg-white border border-amber-300 rounded-xl font-bold text-amber-900"
+                  >
+                    <option value={correctionMatch.entryId1 || ''}>{getEntryLabel(correctionMatch.entryId1)} (Menang WO)</option>
+                    <option value={correctionMatch.entryId2 || ''}>{getEntryLabel(correctionMatch.entryId2)} (Menang WO)</option>
+                  </select>
+                </div>
+              )}
+
+              <p className="text-[10px] text-slate-400 italic">
+                Catatan Sesi: Alasan disimpan pada histori lokal sesi dan akan memperbarui state pertandingan tanpa mengubah schema database Supabase.
+              </p>
+            </div>
+
+            <div className="flex gap-2 justify-end pt-2">
+              <button
+                type="button"
+                onClick={() => setCorrectionMatch(null)}
+                className="px-4 py-2 text-xs font-semibold text-slate-500 hover:text-slate-800 border border-slate-200 rounded-xl transition"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={executeAdminCorrection}
+                className="px-4 py-2 text-xs font-extrabold bg-rose-600 hover:bg-rose-700 text-white border border-rose-700 rounded-xl shadow-xs transition"
+              >
+                Konfirmasi Koreksi
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* SINGLE MATCH RESET MODAL */}
+      {resetSingleMatchItem && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fade-in">
+          <div className="bg-white rounded-2xl border border-slate-150 shadow-2xl max-w-md w-full p-6 space-y-5">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-150">
+              <h3 className="text-base font-extrabold text-slate-900">Reset Hasil Pertandingan Ini</h3>
+              <button onClick={() => setResetSingleMatchItem(null)} className="text-slate-400 hover:text-slate-600">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="space-y-4 text-xs">
+              <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl">
+                <p className="font-extrabold text-slate-900">
+                  {getEntryLabel(resetSingleMatchItem.entryId1)} vs {getEntryLabel(resetSingleMatchItem.entryId2)}
+                </p>
+                <p className="text-[11px] text-slate-500 mt-0.5">
+                  Skor saat ini: <strong>{resetSingleMatchItem.score1 ?? '-'} - {resetSingleMatchItem.score2 ?? '-'}</strong> ({resetSingleMatchItem.status})
+                </p>
+              </div>
+
+              <div className="space-y-1">
+                <label className="font-bold text-slate-700 block">Kategori Alasan Reset <span className="text-rose-500">*</span></label>
+                <select
+                  value={resetSingleReasonCategory}
+                  onChange={(e) => setResetSingleReasonCategory(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-semibold text-slate-800 focus:outline-none"
+                >
+                  <option value="kesalahan_input">Kesalahan Input Skor</option>
+                  <option value="diskualifikasi">Diskualifikasi / Keputusan Panitia</option>
+                  <option value="perubahan_jadwal">Penjadwalan Ulang Match</option>
+                  <option value="keputusan_panitia">Keputusan Panitia / Force Majeure</option>
+                  <option value="lainnya">Lainnya (Tulis alasan khusus)</option>
+                </select>
+              </div>
+
+              {resetSingleReasonCategory === 'lainnya' && (
+                <div className="space-y-1">
+                  <label className="font-bold text-slate-700 block">Rincian Alasan Khusus <span className="text-rose-500">*</span></label>
+                  <input
+                    type="text"
+                    value={resetSingleCustomReason}
+                    onChange={(e) => setResetSingleCustomReason(e.target.value)}
+                    placeholder="Tuliskan alasan reset..."
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs"
+                  />
+                </div>
+              )}
+
+              <p className="text-[11px] text-slate-500 leading-relaxed">
+                Aksi ini akan mengosongkan skor dan pemenang pertandingan ini. Item pertandingan tetap ada dalam jadwal fase grup.
+              </p>
+            </div>
+
+            <div className="flex gap-2 justify-end pt-2">
+              <button
+                type="button"
+                onClick={() => setResetSingleMatchItem(null)}
+                className="px-4 py-2 text-xs font-semibold text-slate-500 hover:text-slate-800 border border-slate-200 rounded-xl"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={executeResetSingleMatch}
+                className="px-4 py-2 text-xs font-extrabold bg-rose-600 hover:bg-rose-700 text-white rounded-xl"
+              >
+                Konfirmasi Reset Match
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* RESET ALL GROUP RESULTS MODAL */}
+      {showResetAllResultsModal && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fade-in">
+          <div className="bg-white rounded-2xl border border-slate-150 shadow-2xl max-w-lg w-full p-6 space-y-5">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-150">
+              <div className="flex items-center gap-2 text-amber-700">
+                <RotateCcw className="h-5 w-5" />
+                <h3 className="text-base font-extrabold text-slate-900">Reset Seluruh Hasil Fase Grup</h3>
+              </div>
+              <button onClick={() => setShowResetAllResultsModal(false)} className="text-slate-400 hover:text-slate-600">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="space-y-4 text-xs">
+              <div className="space-y-1.5">
+                <label className="font-bold text-slate-700 block">Kategori Alasan Reset Hasil <span className="text-rose-500">*</span></label>
+                <select
+                  value={resetAllResultsCategory}
+                  onChange={(e) => setResetAllResultsCategory(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-semibold text-slate-800 focus:outline-none"
+                >
+                  <option value="koreksi_total">Koreksi Total Hasil Fase Grup</option>
+                  <option value="perubahan_skema">Perubahan Skema Turnamen / Force Majeure</option>
+                  <option value="gangguan_teknis">Gangguan Sistem / Hasil Tidak Valid</option>
+                  <option value="keputusan_panitia">Keputusan Panitia</option>
+                  <option value="lainnya">Lainnya (Tulis alasan khusus)</option>
+                </select>
+              </div>
+
+              {resetAllResultsCategory === 'lainnya' && (
+                <div className="space-y-1.5">
+                  <label className="font-bold text-slate-700 block">Detail Alasan Khusus <span className="text-rose-500">*</span></label>
+                  <input
+                    type="text"
+                    value={resetAllResultsCustomReason}
+                    onChange={(e) => setResetAllResultsCustomReason(e.target.value)}
+                    placeholder="Tuliskan alasan spesifik reset seluruh hasil..."
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs"
+                  />
+                </div>
+              )}
+
+              <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-xl space-y-1.5 text-amber-900">
+                <h4 className="font-extrabold flex items-center gap-1.5 text-xs">
+                  <AlertCircle className="h-4 w-4 text-amber-600 shrink-0" /> Dampak Reset Seluruh Hasil
+                </h4>
+                <ul className="list-disc list-inside text-[11px] space-y-1 text-amber-800">
+                  <li>Seluruh skor dari <strong>{roundRobinMatches.length} pertandingan fase grup</strong> akan dikosongkan.</li>
+                  <li>Status seluruh pertandingan kembali menjadi <strong>'belum_dimainkan'</strong>.</li>
+                  <li>Jadwal pertandingan dan susunan grup <strong>TETAP DIPERTAHANKAN</strong>.</li>
+                </ul>
+              </div>
+            </div>
+
+            <div className="flex gap-2 justify-end pt-2">
+              <button
+                type="button"
+                onClick={() => setShowResetAllResultsModal(false)}
+                className="px-4 py-2 text-xs font-semibold text-slate-500 hover:text-slate-800 border border-slate-200 rounded-xl"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={executeResetAllResults}
+                className="px-4 py-2 text-xs font-extrabold bg-amber-600 hover:bg-amber-700 text-white rounded-xl"
+              >
+                Konfirmasi Reset Seluruh Hasil
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* RESET SCHEDULE AND ALL RESULTS MODAL */}
+      {showResetScheduleModal && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fade-in">
+          <div className="bg-white rounded-2xl border border-slate-150 shadow-2xl max-w-lg w-full p-6 space-y-5">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-150">
+              <div className="flex items-center gap-2 text-rose-700">
+                <Trash2 className="h-5 w-5" />
+                <h3 className="text-base font-extrabold text-slate-900">Reset Jadwal & Seluruh Hasil Fase Grup</h3>
+              </div>
+              <button onClick={() => setShowResetScheduleModal(false)} className="text-slate-400 hover:text-slate-600">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="space-y-4 text-xs">
+              <div className="space-y-1.5">
+                <label className="font-bold text-slate-700 block">Kategori Alasan Reset Jadwal <span className="text-rose-500">*</span></label>
+                <select
+                  value={resetScheduleCategory}
+                  onChange={(e) => setResetScheduleCategory(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-semibold text-slate-800 focus:outline-none"
+                >
+                  <option value="perubahan_grup">Perubahan Susunan Grup / Peserta</option>
+                  <option value="generate_ulang">Permintaan Generate Ulang Jadwal</option>
+                  <option value="keputusan_panitia">Keputusan Panitia / Force Majeure</option>
+                  <option value="lainnya">Lainnya (Tulis alasan khusus)</option>
+                </select>
+              </div>
+
+              {resetScheduleCategory === 'lainnya' && (
+                <div className="space-y-1.5">
+                  <label className="font-bold text-slate-700 block">Detail Alasan Khusus <span className="text-rose-500">*</span></label>
+                  <input
+                    type="text"
+                    value={resetScheduleCustomReason}
+                    onChange={(e) => setResetScheduleCustomReason(e.target.value)}
+                    placeholder="Tuliskan alasan spesifik reset jadwal..."
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs"
+                  />
+                </div>
+              )}
+
+              <div className="p-3.5 bg-rose-50 border border-rose-200 rounded-xl space-y-1.5 text-rose-900">
+                <h4 className="font-extrabold flex items-center gap-1.5 text-xs">
+                  <AlertCircle className="h-4 w-4 text-rose-600 shrink-0" /> Dampak Reset Jadwal & Hasil
+                </h4>
+                <ul className="list-disc list-inside text-[11px] space-y-1 text-rose-800">
+                  <li>Seluruh jadwal <strong>({roundRobinMatches.length} pertandingan)</strong> dan skor terinput akan DIHAPUS PERMANEN dari divisi ini.</li>
+                  <li>Peserta dan susunan grup <strong>TETAP DIPERTAHANKAN</strong>.</li>
+                  <li>Jadwal baru dapat di-generate ulang kapan saja.</li>
+                </ul>
+              </div>
+            </div>
+
+            <div className="flex gap-2 justify-end pt-2">
+              <button
+                type="button"
+                onClick={() => setShowResetScheduleModal(false)}
+                className="px-4 py-2 text-xs font-semibold text-slate-500 hover:text-slate-800 border border-slate-200 rounded-xl"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={executeResetScheduleAndResults}
+                className="px-4 py-2 text-xs font-extrabold bg-rose-600 hover:bg-rose-700 text-white rounded-xl"
+              >
+                Konfirmasi Reset Jadwal & Hasil
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* INTEGRITY MODAL */}
+      {showIntegrityModal && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fade-in">
+          <div className="bg-white rounded-2xl border border-slate-150 shadow-2xl max-w-lg w-full p-6 space-y-5">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-150">
+              <div className="flex items-center gap-2 text-rose-700">
+                <AlertTriangle className="h-5 w-5" />
+                <h3 className="text-base font-extrabold text-slate-900">Rincian Integritas Jadwal & Hasil</h3>
+              </div>
+              <button onClick={() => setShowIntegrityModal(false)} className="text-slate-400 hover:text-slate-600">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="space-y-3 max-h-[350px] overflow-y-auto pr-1">
+              {anomalies.warnings.map((warn, idx) => (
+                <div key={idx} className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-900 flex items-start gap-2">
+                  <AlertCircle className="h-4 w-4 text-rose-600 shrink-0 mt-0.5" />
+                  <span>{warn}</span>
+                </div>
+              ))}
+            </div>
+
+            <div className="flex gap-2 justify-end pt-2">
+              <button
+                type="button"
+                onClick={() => setShowIntegrityModal(false)}
+                className="px-4 py-2 text-xs font-semibold text-slate-500 hover:text-slate-800 border border-slate-200 rounded-xl"
+              >
+                Tutup
+              </button>
+              {isAdmin && !lockStatus.isLocked && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowIntegrityModal(false);
+                    handleFixMatchIntegrity();
+                  }}
+                  className="px-4 py-2 text-xs font-extrabold bg-rose-600 hover:bg-rose-700 text-white rounded-xl"
+                >
+                  Koreksi Otomatis
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* GENERAL CONFIRM MODAL */}
+      {showConfirm && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fade-in" id="custom-confirm-modal">
+          <div className="bg-white rounded-2xl max-w-md w-full border border-slate-150 p-6 shadow-2xl space-y-4 animate-scale-up" id="custom-confirm-card">
+            <h3 className="text-base font-extrabold text-navy">{showConfirm.title}</h3>
+            <p className="text-xs text-slate-600 leading-relaxed">{showConfirm.message}</p>
+            <div className="flex gap-2 justify-end pt-2">
+              <button
+                type="button"
+                onClick={() => setShowConfirm(null)}
+                className="px-4 py-2 text-xs font-semibold text-slate-500 hover:text-slate-800 border border-slate-200 rounded-xl"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={showConfirm.onConfirm}
+                className="px-4 py-2 text-xs font-extrabold bg-navy hover:bg-navy-light text-neon rounded-xl card-shadow"
+              >
+                Ya, Lanjutkan
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* GENERAL ALERT MODAL */}
+      {showAlert && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fade-in" id="custom-alert-modal">
+          <div className="bg-white rounded-2xl max-w-md w-full border border-slate-150 p-6 shadow-2xl space-y-4 animate-scale-up" id="custom-alert-card">
+            <h3 className="text-base font-extrabold text-navy flex items-center gap-2">
+              <AlertCircle className="h-5 w-5 text-amber-500" />
+              {showAlert.title}
+            </h3>
+            <p className="text-xs text-slate-600 leading-relaxed">{showAlert.message}</p>
+            <div className="flex justify-end pt-2">
+              <button
+                type="button"
+                onClick={() => setShowAlert(null)}
+                className="px-5 py-2 text-xs font-extrabold bg-navy hover:bg-navy-light text-neon rounded-xl card-shadow"
+              >
+                Mengerti
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }
