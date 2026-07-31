@@ -1,5 +1,137 @@
+import { supabase, isSupabaseConfigured } from '../lib/supabaseClient';
+import { Tournament, KnockoutStage, ServiceResult } from '../types';
+import { getDbDivisionId } from './divisionService';
+import { getValidEntryId } from './entryService';
 import { saveTournamentToSupabase } from './tournamentService';
-import { Tournament, KnockoutStage } from '../types';
+
+/**
+ * Save knockout slots and champions for a tournament to Supabase.
+ */
+export async function saveKnockoutSlotsAndChampionsToSupabase(
+  tournament: Tournament,
+  insertedEntryIds: Set<string>
+): Promise<ServiceResult<boolean>> {
+  if (!isSupabaseConfigured) {
+    return {
+      success: false,
+      error: { module: 'knockout', operation: 'insert', message: 'Database Cloud (Supabase) belum terkonfigurasi.' }
+    };
+  }
+
+  try {
+    // 1. Delete existing champions and knockout slots for cleanup
+    const { error: delChampError } = await supabase.from('champions').delete().eq('tournament_id', tournament.id);
+    if (delChampError) {
+      return { success: false, error: { module: 'knockout', operation: 'delete', message: delChampError.message, details: JSON.stringify(delChampError) } };
+    }
+
+    const { error: delSlotError } = await supabase.from('knockout_slots').delete().eq('tournament_id', tournament.id);
+    if (delSlotError) {
+      return { success: false, error: { module: 'knockout', operation: 'delete', message: delSlotError.message, details: JSON.stringify(delSlotError) } };
+    }
+
+    const validActiveDivisions = tournament.activeDivisions || [];
+
+    // 2. Insert Knockout Slots
+    const allKnockoutSlots: any[] = [];
+    validActiveDivisions.forEach(div => {
+      const dbDivId = getDbDivisionId(div.id, tournament.id);
+      if (div.knockoutStage && div.knockoutStage.confirmedEntryIds) {
+        div.knockoutStage.confirmedEntryIds.forEach((entId, idx) => {
+          allKnockoutSlots.push({
+            tournament_id: tournament.id,
+            division_id: dbDivId,
+            seed_no: idx + 1,
+            entry_id: getValidEntryId(entId, insertedEntryIds),
+            source_label: `Seed ${idx + 1}`,
+            is_wildcard: false,
+            is_bye: entId === 'BYE'
+          });
+        });
+      }
+    });
+
+    if (allKnockoutSlots.length > 0) {
+      const { error: slotError } = await supabase.from('knockout_slots').insert(allKnockoutSlots);
+      if (slotError) {
+        return { success: false, error: { module: 'knockout', operation: 'insert', message: slotError.message, details: JSON.stringify(slotError) } };
+      }
+    }
+
+    // 3. Insert Champions
+    const allChampions: any[] = [];
+    validActiveDivisions.forEach(div => {
+      const dbDivId = getDbDivisionId(div.id, tournament.id);
+      if (div.champions) {
+        allChampions.push({
+          id: `c-${dbDivId}`,
+          tournament_id: tournament.id,
+          division_id: dbDivId,
+          champion_entry_id: getValidEntryId(div.champions.firstPlaceEntryId, insertedEntryIds),
+          runner_up_entry_id: getValidEntryId(div.champions.secondPlaceEntryId, insertedEntryIds),
+          third_place_entry_id: getValidEntryId(div.champions.thirdPlaceEntryId, insertedEntryIds)
+        });
+      }
+    });
+
+    if (allChampions.length > 0) {
+      const { error: champError } = await supabase.from('champions').upsert(allChampions);
+      if (champError) {
+        return { success: false, error: { module: 'knockout', operation: 'insert', message: champError.message, details: JSON.stringify(champError) } };
+      }
+    }
+
+    return { success: true, data: true };
+  } catch (err: any) {
+    return {
+      success: false,
+      error: {
+        module: 'knockout',
+        operation: 'insert',
+        message: err?.message || 'Gagal menyimpan data knockout ke cloud.',
+        details: JSON.stringify(err)
+      }
+    };
+  }
+}
+
+/**
+ * Load knockout slots and champions for a tournament from Supabase.
+ */
+export async function loadKnockoutSlotsAndChampionsForTournament(
+  tournamentId: string
+): Promise<ServiceResult<{ knockoutSlots: any[]; champions: any[] }>> {
+  if (!isSupabaseConfigured) {
+    return { success: false, error: { module: 'knockout', operation: 'load', message: 'Database cloud belum terkonfigurasi.' } };
+  }
+
+  try {
+    const { data: slotData, error: slotErr } = await supabase
+      .from('knockout_slots')
+      .select('*')
+      .eq('tournament_id', tournamentId);
+    if (slotErr) return { success: false, error: { module: 'knockout', operation: 'load', message: slotErr.message, details: JSON.stringify(slotErr) } };
+
+    const { data: champData, error: champErr } = await supabase
+      .from('champions')
+      .select('*')
+      .eq('tournament_id', tournamentId);
+    if (champErr) return { success: false, error: { module: 'knockout', operation: 'load', message: champErr.message, details: JSON.stringify(champErr) } };
+
+    return {
+      success: true,
+      data: {
+        knockoutSlots: slotData || [],
+        champions: champData || []
+      }
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      error: { module: 'knockout', operation: 'load', message: err?.message || 'Gagal memuat data knockout dari cloud.' }
+    };
+  }
+}
 
 /**
  * Service to handle knockout stage bracket setups and matches.

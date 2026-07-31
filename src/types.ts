@@ -115,6 +115,8 @@ export type ServiceResult<T> =
         code?: string;
         message: string;
         details?: string;
+        module?: string;
+        operation?: string;
       };
     };
 
