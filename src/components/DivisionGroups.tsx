@@ -89,10 +89,17 @@ export default function DivisionGroups({ division, onUpdateDivision, isAdmin = t
   // Check if modification is blocked by lock status
   const checkModificationAllowed = (): boolean => {
     if (lockStatus.isLocked) {
-      setShowAlert({
-        title: 'Pembagian Grup Terkunci 🔒',
-        message: lockStatus.reason || 'Struktur grup tidak dapat diubah karena pertandingan telah memiliki skor atau fase knockout telah terbentuk.'
-      });
+      if (lockStatus.hasScores) {
+        setShowAlert({
+          title: 'Pembagian Grup Terkunci 🔒',
+          message: 'Beberapa pertandingan sudah memiliki skor. Struktur grup tidak dapat diubah dari halaman pembagian grup. Reset hasil pertandingan terlebih dahulu melalui modul Jadwal Pertandingan.'
+        });
+      } else {
+        setShowAlert({
+          title: 'Pembagian Grup Terkunci 🔒',
+          message: lockStatus.reason || 'Struktur grup tidak dapat diubah.'
+        });
+      }
       return false;
     }
     return true;
@@ -313,9 +320,19 @@ export default function DivisionGroups({ division, onUpdateDivision, isAdmin = t
 
   // Lock groups and generate round robin matches schedule
   const handleLockAndGenerate = () => {
+    // 1. Check strict lock status
     if (!checkModificationAllowed()) return;
 
-    // 1. Validation: empty groups
+    // 2. Check unassigned entries (STRICT BLOCK - Rule A)
+    if (unassignedEntries.length > 0) {
+      setShowAlert({
+        title: 'Peserta Belum Masuk Grup ⚠️',
+        message: `Masih ada ${unassignedEntries.length} peserta yang belum ditempatkan ke grup. Masukkan seluruh peserta ke grup atau keluarkan dari peserta aktif terlebih dahulu.`
+      });
+      return;
+    }
+
+    // 3. Validation: empty groups
     const emptyGroups = localGroups.filter(g => g.entryIds.length === 0);
     if (emptyGroups.length > 0) {
       setShowAlert({
@@ -325,7 +342,7 @@ export default function DivisionGroups({ division, onUpdateDivision, isAdmin = t
       return;
     }
 
-    // 2. Validation: minimum 2 entries per group
+    // 4. Validation: minimum 2 entries per group
     const underpopulatedGroups = localGroups.filter(g => g.entryIds.length < 2);
     if (underpopulatedGroups.length > 0) {
       setShowAlert({
@@ -357,11 +374,12 @@ export default function DivisionGroups({ division, onUpdateDivision, isAdmin = t
       setShowConfirm(null);
     };
 
-    if (unassignedEntries.length > 0) {
+    // 5. Check if schedule exists without scores (Rule B & C)
+    if (lockStatus.hasMatches && !lockStatus.hasScores) {
       setShowConfirm({
-        title: 'Ada Peserta Belum Masuk Grup ⚠️',
-        message: `Ada ${unassignedEntries.length} peserta yang belum masuk ke dalam grup. Apakah Anda yakin ingin membuat jadwal hanya untuk ${assignedCount} peserta yang sudah ada di grup?`,
-        confirmText: 'Lanjutkan Buat Jadwal Parsial',
+        title: 'Generate Ulang Jadwal Round Robin?',
+        message: `Jadwal pertandingan round robin sudah ada (${roundRobinMatches.length} pertandingan, belum ada skor). Generate ulang jadwal akan menghapus jadwal lama dan membuat jadwal baru berdasarkan grup aktif saat ini. Apakah Anda yakin?`,
+        confirmText: 'Ya, Generate Ulang Jadwal',
         onConfirm: proceedGenerate
       });
     } else {
