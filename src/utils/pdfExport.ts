@@ -201,7 +201,7 @@ export function exportTournamentToPDF(tournament: Tournament): void {
 
       div.groups.forEach((group, gIndex) => {
         // Compute standings on-the-fly for latest stats
-        const standings = calculateGroupStandings(group, div.roundRobinMatches, div.entries);
+        const standings = calculateGroupStandings(group, div.roundRobinMatches, div.entries, div.settings.playersQualifyingPerGroup || 2);
 
         doc.setFont('helvetica', 'bold');
         doc.setFontSize(9);

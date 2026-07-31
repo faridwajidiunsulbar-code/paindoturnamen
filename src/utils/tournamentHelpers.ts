@@ -38,37 +38,50 @@ export function generateRoundRobinMatches(
 
 /**
  * Calculate standings for a group based on matches played.
- * Urutan tie-breaker:
- * 1. jumlah menang terbanyak
- * 2. selisih poin terbaik
- * 3. head-to-head, hanya jika yang seri tepat 2 peserta
- * 4. poin masuk terbanyak
- * 5. keputusan admin/manual (handled by rank adjustment if edited)
+ * Urutan tie-breaker wajib PAINDO-007:
+ * 1. Jumlah Menang (Won)
+ * 2. Poin Masuk Terbanyak (Points For / PF)
+ * 3. Selisih Poin (Point Difference / Diff)
+ * 4. Head-to-Head (H2H), HANYA jika tepat 2 peserta yang seri pada kriteria 1, 2, dan 3
+ * 5. Keputusan Admin (jika H2H tidak valid / belum dimainkan, atau jika >= 3 peserta seri)
  */
 export function calculateGroupStandings(
   group: Group,
   matches: Match[],
-  entries: Entry[]
+  entries: Entry[],
+  qualifyingCountPerGroup: number = 2
 ): GroupStandingRow[] {
-  // Robust match filtering for group: match by entry IDs or group name
-  const groupMatches = matches.filter(m => {
-    if (m.type && m.type !== 'ROUND_ROBIN' && m.type !== ('ROUND_ROBIN' as any)) return false;
+  // Deduplicate and filter group matches
+  const groupMatchIds = new Set<string>();
+  const groupMatches: Match[] = [];
 
-    // 1. Check if both entries in match belong to this group's entry list
+  matches.forEach(m => {
+    if (m.type && m.type !== 'ROUND_ROBIN' && (m.type as any) !== 'ROUND_ROBIN') return;
+    if (groupMatchIds.has(m.id)) return;
+
+    let belongsToGroup = false;
+
+    // 1. Check if both entries belong to group
     if (m.entryId1 && m.entryId2 && group.entryIds.includes(m.entryId1) && group.entryIds.includes(m.entryId2)) {
-      return true;
+      belongsToGroup = true;
     }
 
-    // 2. Check by group name comparison (case-insensitive & ignoring "Grup"/"Pool" prefix)
-    if (m.groupName && group.name) {
-      if (m.groupName === group.name) return true;
-      const mNorm = m.groupName.replace(/^(grup|pool)\s+/i, '').trim().toLowerCase();
-      const gNorm = group.name.replace(/^(grup|pool)\s+/i, '').trim().toLowerCase();
-      if (mNorm === gNorm) return true;
+    // 2. Check by group name
+    if (!belongsToGroup && m.groupName && group.name) {
+      if (m.groupName === group.name) belongsToGroup = true;
+      else {
+        const mNorm = m.groupName.replace(/^(grup|pool)\s+/i, '').trim().toLowerCase();
+        const gNorm = group.name.replace(/^(grup|pool)\s+/i, '').trim().toLowerCase();
+        if (mNorm === gNorm) belongsToGroup = true;
+      }
     }
 
-    return false;
+    if (belongsToGroup) {
+      groupMatchIds.add(m.id);
+      groupMatches.push(m);
+    }
   });
+
   const standingsMap: Record<string, GroupStandingRow> = {};
 
   // Initialize standings for all entries in the group
@@ -88,23 +101,34 @@ export function calculateGroupStandings(
       pointsAgainst: 0,
       pointDifference: 0,
       rank: 0,
+      needsAdminDecision: false,
+      tieBreakReason: '',
+      isTieBoundary: false,
     };
   });
 
-  // Accumulate match scores
+  // Accumulate valid match scores
   groupMatches.forEach(match => {
-    const { entryId1, entryId2, score1, score2, status } = match;
+    const { entryId1, entryId2, score1, score2, status, winnerId } = match;
     if (!entryId1 || !entryId2) return;
 
     const row1 = standingsMap[entryId1];
     const row2 = standingsMap[entryId2];
-
-    // Skip if entry is not in this group (shouldn't happen)
     if (!row1 || !row2) return;
 
+    const s1 = score1 ?? null;
+    const s2 = score2 ?? null;
+
     if (status === 'selesai') {
-      const s1 = score1 ?? 0;
-      const s2 = score2 ?? 0;
+      if (s1 === null || s2 === null || s1 < 0 || s2 < 0 || !Number.isInteger(s1) || !Number.isInteger(s2) || s1 === s2) {
+        return; // Skip invalid or draw score
+      }
+
+      const expectedWinner = s1 > s2 ? entryId1 : entryId2;
+      const actualWinner = winnerId || expectedWinner;
+
+      if (actualWinner !== entryId1 && actualWinner !== entryId2) return;
+      if (actualWinner !== expectedWinner) return; // Mismatch between winnerId and scores
 
       row1.played += 1;
       row2.played += 1;
@@ -113,132 +137,209 @@ export function calculateGroupStandings(
       row2.pointsFor += s2;
       row2.pointsAgainst += s1;
 
-      if (s1 > s2) {
+      if (actualWinner === entryId1) {
         row1.won += 1;
         row2.lost += 1;
-      } else if (s2 > s1) {
+      } else {
         row2.won += 1;
         row1.lost += 1;
       }
     } else if (status === 'walkover') {
+      if (!winnerId || (winnerId !== entryId1 && winnerId !== entryId2)) return;
+      if (s1 === null || s2 === null || s1 < 0 || s2 < 0 || !Number.isInteger(s1) || !Number.isInteger(s2) || s1 === s2) {
+        return; // Skip incomplete or invalid WO scores
+      }
+
+      if (winnerId === entryId1 && s1 <= s2) return;
+      if (winnerId === entryId2 && s2 <= s1) return;
+
       row1.played += 1;
       row2.played += 1;
-
-      // In pickleball, walkover is usually recorded as target score (e.g. 11-0 or 15-0)
-      // We will read what scores are entered. If none are entered, we default to e.g. 11-0 based on winner
-      const s1 = score1 ?? 0;
-      const s2 = score2 ?? 0;
-
       row1.pointsFor += s1;
       row1.pointsAgainst += s2;
       row2.pointsFor += s2;
       row2.pointsAgainst += s1;
 
-      if (s1 > s2) {
+      if (winnerId === entryId1) {
         row1.won += 1;
         row2.lost += 1;
-      } else if (s2 > s1) {
+      } else {
         row2.won += 1;
         row1.lost += 1;
       }
     }
   });
 
-  // Calculate differences
+  // Calculate Point Difference
   const rows = Object.values(standingsMap).map(row => {
     row.pointDifference = row.pointsFor - row.pointsAgainst;
     return row;
   });
 
-  // Sort according to rules
+  // Initial sort by 1. Won desc, 2. PointsFor desc, 3. PointDifference desc
   rows.sort((a, b) => {
-    // 1. Wins (Jumlah Menang)
-    if (b.won !== a.won) {
-      return b.won - a.won;
-    }
-
-    // 2. Points For (Jumlah poin kemenangan / pf)
-    if (b.pointsFor !== a.pointsFor) {
-      return b.pointsFor - a.pointsFor;
-    }
-
-    // 3. Point Difference (Selisih Poin: Poin Masuk - Poin Keluar)
-    if (b.pointDifference !== a.pointDifference) {
-      return b.pointDifference - a.pointDifference;
-    }
-
-    // 4. Head to Head (hanya jika tepat 2 peserta seri pada Menang, Poin Masuk, dan Selisih Poin)
-    const tiedOnStats = rows.filter(
-      r => r.won === a.won && r.pointsFor === a.pointsFor && r.pointDifference === a.pointDifference
-    );
-
-    if (tiedOnStats.length === 2) {
-      const h2hMatch = groupMatches.find(
-        m =>
-          (m.status === 'selesai' || m.status === 'walkover') &&
-          ((m.entryId1 === a.entryId && m.entryId2 === b.entryId) ||
-            (m.entryId1 === b.entryId && m.entryId2 === a.entryId))
-      );
-
-      if (h2hMatch) {
-        let winnerId: string | null = null;
-        if (h2hMatch.score1 !== null && h2hMatch.score2 !== null) {
-          if (h2hMatch.score1 > h2hMatch.score2) winnerId = h2hMatch.entryId1;
-          else if (h2hMatch.score2 > h2hMatch.score1) winnerId = h2hMatch.entryId2;
-        }
-
-        if (winnerId === a.entryId) return -1;
-        if (winnerId === b.entryId) return 1;
-      }
-    }
-
-    // 5. Default/stable
+    if (b.won !== a.won) return b.won - a.won;
+    if (b.pointsFor !== a.pointsFor) return b.pointsFor - a.pointsFor;
+    if (b.pointDifference !== a.pointDifference) return b.pointDifference - a.pointDifference;
     return 0;
   });
 
-  // Map ranks first
-  const rankedRows = rows.map((row, index) => ({
-    ...row,
-    rank: index + 1,
-  }));
+  // Partition into tied clusters
+  const clusters: GroupStandingRow[][] = [];
+  let currentCluster: GroupStandingRow[] = [];
 
-  // Identify ties that need manual admin decision/tie-breaker override
-  rankedRows.forEach(rowA => {
-    // Find all other rows that have the exact same core stats
-    const tiedOthers = rankedRows.filter(
-      rowB => rowB.entryId !== rowA.entryId &&
-              rowB.won === rowA.won &&
-              rowB.pointsFor === rowA.pointsFor &&
-              rowB.pointDifference === rowA.pointDifference
-    );
+  rows.forEach(row => {
+    if (currentCluster.length === 0) {
+      currentCluster.push(row);
+    } else {
+      const prev = currentCluster[0];
+      if (
+        row.won === prev.won &&
+        row.pointsFor === prev.pointsFor &&
+        row.pointDifference === prev.pointDifference
+      ) {
+        currentCluster.push(row);
+      } else {
+        clusters.push(currentCluster);
+        currentCluster = [row];
+      }
+    }
+  });
+  if (currentCluster.length > 0) {
+    clusters.push(currentCluster);
+  }
 
-    if (tiedOthers.length > 0) {
-      if (tiedOthers.length === 1) {
-        // Exactly 2 players are tied on Wins, PointDiff, and PointsFor
-        const rowB = tiedOthers[0];
-        
-        // Find their H2H match
-        const h2hMatch = groupMatches.find(
-          m =>
-            (m.status === 'selesai' || m.status === 'walkover') &&
-            ((m.entryId1 === rowA.entryId && m.entryId2 === rowB.entryId) ||
-              (m.entryId1 === rowB.entryId && m.entryId2 === rowA.entryId))
-        );
+  // Resolve clusters
+  const finalOrderedRows: GroupStandingRow[] = [];
 
-        let hasH2hWinner = false;
-        if (h2hMatch) {
-          if (h2hMatch.score1 !== null && h2hMatch.score2 !== null && h2hMatch.score1 !== h2hMatch.score2) {
-            hasH2hWinner = true;
+  clusters.forEach(cluster => {
+    if (cluster.length === 1) {
+      const item = cluster[0];
+      item.needsAdminDecision = false;
+      item.tieBreakReason = `Statistik Utama (${item.won} Menang, ${item.pointsFor} PF, Diff ${item.pointDifference > 0 ? `+${item.pointDifference}` : item.pointDifference})`;
+      finalOrderedRows.push(item);
+    } else if (cluster.length === 2) {
+      const p1 = cluster[0];
+      const p2 = cluster[1];
+
+      // Find H2H match
+      const h2hMatch = groupMatches.find(
+        m =>
+          (m.status === 'selesai' || m.status === 'walkover') &&
+          ((m.entryId1 === p1.entryId && m.entryId2 === p2.entryId) ||
+            (m.entryId1 === p2.entryId && m.entryId2 === p1.entryId))
+      );
+
+      let h2hWinnerId: string | null = null;
+      if (h2hMatch) {
+        const s1 = h2hMatch.score1;
+        const s2 = h2hMatch.score2;
+        if (s1 !== null && s2 !== null && s1 !== s2 && s1 >= 0 && s2 >= 0) {
+          if (h2hMatch.status === 'selesai') {
+            const expW = s1 > s2 ? h2hMatch.entryId1 : h2hMatch.entryId2;
+            if (h2hMatch.winnerId === expW) {
+              h2hWinnerId = expW;
+            }
+          } else if (h2hMatch.status === 'walkover') {
+            if (h2hMatch.winnerId === h2hMatch.entryId1 && s1 > s2) {
+              h2hWinnerId = h2hMatch.entryId1;
+            } else if (h2hMatch.winnerId === h2hMatch.entryId2 && s2 > s1) {
+              h2hWinnerId = h2hMatch.entryId2;
+            }
           }
         }
+      }
 
-        if (!hasH2hWinner) {
-          rowA.needsAdminDecision = true;
+      if (h2hWinnerId) {
+        const winner = h2hWinnerId === p1.entryId ? p1 : p2;
+        const loser = h2hWinnerId === p1.entryId ? p2 : p1;
+
+        winner.needsAdminDecision = false;
+        winner.tieBreakReason = `Unggul Head-to-Head (${winner.won}W, ${winner.pointsFor}PF, Diff ${winner.pointDifference > 0 ? `+${winner.pointDifference}` : winner.pointDifference})`;
+
+        loser.needsAdminDecision = false;
+        loser.tieBreakReason = `Kalah Head-to-Head (${loser.won}W, ${loser.pointsFor}PF, Diff ${loser.pointDifference > 0 ? `+${loser.pointDifference}` : loser.pointDifference})`;
+
+        if (group.manualRankings && group.manualRankings[winner.entryId] !== undefined && group.manualRankings[loser.entryId] !== undefined) {
+          const rW = group.manualRankings[winner.entryId];
+          const rL = group.manualRankings[loser.entryId];
+          if (rW < rL) {
+            finalOrderedRows.push(winner, loser);
+          } else {
+            finalOrderedRows.push(loser, winner);
+          }
+        } else {
+          finalOrderedRows.push(winner, loser);
         }
       } else {
-        // More than 2 players are tied, so H2H is not used.
-        // It's a perfect tie across Wins, Point Difference, and Points For.
-        rowA.needsAdminDecision = true;
+        // H2H not valid / unplayed -> Needs Admin Decision!
+        const hasAdminOverride = group.manualRankings &&
+          group.manualRankings[p1.entryId] !== undefined &&
+          group.manualRankings[p2.entryId] !== undefined;
+
+        p1.needsAdminDecision = true;
+        p2.needsAdminDecision = true;
+
+        const reasonStr = hasAdminOverride && group.manualRankingReason
+          ? `Keputusan Admin: ${group.manualRankingReason}`
+          : 'Seri 2 Peserta (H2H Belum/Tidak Valid) — Keputusan Admin Diperlukan';
+
+        p1.tieBreakReason = reasonStr;
+        p2.tieBreakReason = reasonStr;
+
+        if (hasAdminOverride) {
+          if (group.manualRankings![p1.entryId] < group.manualRankings![p2.entryId]) {
+            finalOrderedRows.push(p1, p2);
+          } else {
+            finalOrderedRows.push(p2, p1);
+          }
+        } else {
+          finalOrderedRows.push(p1, p2);
+        }
+      }
+    } else {
+      // Cluster size >= 3 -> H2H is NOT used per PAINDO-007 rules
+      const hasAdminOverride = group.manualRankings && cluster.every(item => group.manualRankings![item.entryId] !== undefined);
+
+      cluster.forEach(item => {
+        item.needsAdminDecision = true;
+        const reasonStr = hasAdminOverride && group.manualRankingReason
+          ? `Keputusan Admin: ${group.manualRankingReason}`
+          : `Seri ${cluster.length} Peserta — Keputusan Admin Diperlukan`;
+        item.tieBreakReason = reasonStr;
+      });
+
+      if (hasAdminOverride) {
+        cluster.sort((a, b) => {
+          const rA = group.manualRankings?.[a.entryId] ?? 999;
+          const rB = group.manualRankings?.[b.entryId] ?? 999;
+          return rA - rB;
+        });
+      }
+
+      finalOrderedRows.push(...cluster);
+    }
+  });
+
+  // Assign ranks & check tie boundary
+  const rankedRows = finalOrderedRows.map((row, index) => {
+    const r = index + 1;
+    return {
+      ...row,
+      rank: r,
+      manualOverrideRank: group.manualRankings?.[row.entryId],
+    };
+  });
+
+  // Check if any tied group crosses the qualification boundary
+  rankedRows.forEach(row => {
+    if (row.needsAdminDecision && (!group.manualRankings || !group.manualRankings[row.entryId])) {
+      const tiedGroup = rankedRows.filter(r => r.won === row.won && r.pointsFor === row.pointsFor && r.pointDifference === row.pointDifference);
+      const minRank = Math.min(...tiedGroup.map(t => t.rank));
+      const maxRank = Math.max(...tiedGroup.map(t => t.rank));
+
+      if (minRank <= qualifyingCountPerGroup && maxRank > qualifyingCountPerGroup) {
+        row.isTieBoundary = true;
       }
     }
   });

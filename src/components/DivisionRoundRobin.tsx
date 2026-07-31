@@ -82,6 +82,11 @@ export default function DivisionRoundRobin({ division, onUpdateDivision, isAdmin
   // Integrity Modal State
   const [showIntegrityModal, setShowIntegrityModal] = useState(false);
 
+  // Admin Tie-Breaker Decision Modal State
+  const [adminTieGroup, setAdminTieGroup] = useState<Group | null>(null);
+  const [adminTieOrder, setAdminTieOrder] = useState<string[]>([]);
+  const [adminTieReason, setAdminTieReason] = useState<string>('');
+
   // General Confirmation & Alert Popups
   const [showConfirm, setShowConfirm] = useState<{
     title: string;
@@ -282,8 +287,105 @@ export default function DivisionRoundRobin({ division, onUpdateDivision, isAdmin
   // Calculate standings for each group
   const standingsByGroup: Record<string, GroupStandingRow[]> = {};
   groups.forEach(g => {
-    standingsByGroup[g.id] = calculateGroupStandings(g, roundRobinMatches, entries);
+    standingsByGroup[g.id] = calculateGroupStandings(g, roundRobinMatches, entries, settings.playersQualifyingPerGroup || 2);
   });
+
+  // Calculate Match Status Counts
+  const totalRRMatches = roundRobinMatches.length;
+  const finishedMatchesCount = roundRobinMatches.filter(m => m.status === 'selesai').length;
+  const walkoverMatchesCount = roundRobinMatches.filter(m => m.status === 'walkover').length;
+  const unplayedMatchesCount = roundRobinMatches.filter(m => m.status === 'belum_dimainkan').length;
+
+  // Open Admin Tie-Breaker Modal
+  const openAdminTieModal = (group: Group) => {
+    if (lockStatus.isLocked) {
+      setShowAlert({
+        title: 'Penetapan Peringkat Terkunci 🔒',
+        message: lockStatus.reason
+      });
+      return;
+    }
+
+    const currentRows = standingsByGroup[group.id] || [];
+    setAdminTieGroup(group);
+    setAdminTieOrder(currentRows.map(r => r.entryId));
+    setAdminTieReason(group.manualRankingReason || '');
+  };
+
+  const moveTieOrder = (index: number, direction: 'up' | 'down') => {
+    if (direction === 'up' && index === 0) return;
+    if (direction === 'down' && index === adminTieOrder.length - 1) return;
+
+    const newOrder = [...adminTieOrder];
+    const targetIndex = direction === 'up' ? index - 1 : index + 1;
+    const temp = newOrder[index];
+    newOrder[index] = newOrder[targetIndex];
+    newOrder[targetIndex] = temp;
+    setAdminTieOrder(newOrder);
+  };
+
+  const saveAdminTieDecision = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!adminTieGroup) return;
+
+    if (!adminTieReason.trim()) {
+      setShowAlert({
+        title: 'Alasan Wajib Diisi ⚠️',
+        message: 'Mohon masukkan alasan keputusan admin / intervensi panitia untuk urutan peringkat.'
+      });
+      return;
+    }
+
+    const manualRankings: Record<string, number> = {};
+    adminTieOrder.forEach((entryId, idx) => {
+      manualRankings[entryId] = idx + 1;
+    });
+
+    const updatedGroups = groups.map(g => {
+      if (g.id === adminTieGroup.id) {
+        return {
+          ...g,
+          manualRankings,
+          manualRankingReason: adminTieReason.trim(),
+        };
+      }
+      return g;
+    });
+
+    onUpdateDivision({
+      ...division,
+      groups: updatedGroups,
+    });
+
+    setAdminTieGroup(null);
+    setShowAlert({
+      title: 'Keputusan Admin Tersimpan 🎯',
+      message: `Berhasil menetapkan urutan peringkat manual untuk ${adminTieGroup.name}.`
+    });
+  };
+
+  const resetAdminTieDecision = () => {
+    if (!adminTieGroup) return;
+
+    const updatedGroups = groups.map(g => {
+      if (g.id === adminTieGroup.id) {
+        const { manualRankings, manualRankingReason, ...rest } = g;
+        return rest;
+      }
+      return g;
+    });
+
+    onUpdateDivision({
+      ...division,
+      groups: updatedGroups,
+    });
+
+    setAdminTieGroup(null);
+    setShowAlert({
+      title: 'Keputusan Admin Dihapus 🔄',
+      message: `Peringkat untuk ${adminTieGroup.name} dikembalikan ke kalkulasi otomatis.`
+    });
+  };
 
   // Open scoring modal
   const openScoringModal = (match: Match) => {
@@ -341,6 +443,29 @@ export default function DivisionRoundRobin({ division, onUpdateDivision, isAdmin
     }
   };
 
+  // Reset manual admin tie decisions if group scores change
+  const clearGroupManualTieIfNeeded = (match: Match, groupsList: Group[]): Group[] => {
+    return groupsList.map(g => {
+      let belongs = false;
+      if (match.entryId1 && match.entryId2 && g.entryIds.includes(match.entryId1) && g.entryIds.includes(match.entryId2)) {
+        belongs = true;
+      } else if (match.groupName && g.name) {
+        if (match.groupName === g.name) belongs = true;
+        else {
+          const mNorm = match.groupName.replace(/^(grup|pool)\s+/i, '').trim().toLowerCase();
+          const gNorm = g.name.replace(/^(grup|pool)\s+/i, '').trim().toLowerCase();
+          if (mNorm === gNorm) belongs = true;
+        }
+      }
+
+      if (belongs && (g.manualRankings || g.manualRankingReason)) {
+        const { manualRankings, manualRankingReason, ...rest } = g;
+        return rest;
+      }
+      return g;
+    });
+  };
+
   const executeCommitScore = (
     fs1: number | null,
     fs2: number | null,
@@ -364,9 +489,12 @@ export default function DivisionRoundRobin({ division, onUpdateDivision, isAdmin
       return m;
     });
 
+    const updatedGroups = scoringMatch ? clearGroupManualTieIfNeeded(scoringMatch, groups) : groups;
+
     onUpdateDivision({
       ...division,
-      roundRobinMatches: updatedMatches
+      roundRobinMatches: updatedMatches,
+      groups: updatedGroups,
     });
 
     setScoringMatch(null);
@@ -723,9 +851,12 @@ export default function DivisionRoundRobin({ division, onUpdateDivision, isAdmin
       });
     }
 
+    const updatedGroupsCorrection = correctionMatch ? clearGroupManualTieIfNeeded(correctionMatch, groups) : groups;
+
     onUpdateDivision({
       ...division,
-      roundRobinMatches: updatedMatches
+      roundRobinMatches: updatedMatches,
+      groups: updatedGroupsCorrection,
     });
 
     setCorrectionMatch(null);
@@ -786,9 +917,12 @@ export default function DivisionRoundRobin({ division, onUpdateDivision, isAdmin
       return m;
     });
 
+    const updatedGroupsResetSingle = clearGroupManualTieIfNeeded(resetSingleMatchItem, groups);
+
     onUpdateDivision({
       ...division,
-      roundRobinMatches: updatedMatches
+      roundRobinMatches: updatedMatches,
+      groups: updatedGroupsResetSingle,
     });
 
     setShowAlert({
@@ -830,9 +964,15 @@ export default function DivisionRoundRobin({ division, onUpdateDivision, isAdmin
       notes: undefined
     }));
 
+    const clearedGroups = groups.map(g => {
+      const { manualRankings, manualRankingReason, ...rest } = g;
+      return rest;
+    });
+
     onUpdateDivision({
       ...division,
-      roundRobinMatches: resetMatches
+      roundRobinMatches: resetMatches,
+      groups: clearedGroups,
     });
 
     setShowAlert({
@@ -863,9 +1003,15 @@ export default function DivisionRoundRobin({ division, onUpdateDivision, isAdmin
       return;
     }
 
+    const clearedGroups = groups.map(g => {
+      const { manualRankings, manualRankingReason, ...rest } = g;
+      return rest;
+    });
+
     onUpdateDivision({
       ...division,
-      roundRobinMatches: []
+      roundRobinMatches: [],
+      groups: clearedGroups,
     });
 
     setShowAlert({
@@ -1088,16 +1234,78 @@ export default function DivisionRoundRobin({ division, onUpdateDivision, isAdmin
               </p>
             </div>
 
+            {/* Match Progress Summary Banner */}
+            <div className="bg-slate-50 border border-slate-200 rounded-2xl p-3.5 space-y-2 text-xs" id="match-progress-summary">
+              <div className="flex flex-wrap items-center justify-between gap-2 text-slate-700 font-bold">
+                <span>Progress Pertandingan Grup:</span>
+                <div className="flex items-center gap-1.5 text-[11px]">
+                  <span className="px-2 py-0.5 bg-emerald-100 text-emerald-800 rounded font-semibold">
+                    Selesai: {finishedMatchesCount}
+                  </span>
+                  <span className="px-2 py-0.5 bg-amber-100 text-amber-800 rounded font-semibold">
+                    WO: {walkoverMatchesCount}
+                  </span>
+                  <span className="px-2 py-0.5 bg-slate-200 text-slate-700 rounded font-semibold">
+                    Sisa: {unplayedMatchesCount}
+                  </span>
+                </div>
+              </div>
+              {unplayedMatchesCount > 0 && (
+                <p className="text-[11px] text-amber-800 bg-amber-50 p-2 rounded-lg border border-amber-200 leading-normal font-medium">
+                  ℹ️ Fase grup belum selesai ({unplayedMatchesCount} dari {totalRRMatches} match belum dimainkan). Peringkat klasemen & status kelolosan saat ini bersifat sementara.
+                </p>
+              )}
+            </div>
+
             {groups.map(group => {
               const rows = standingsByGroup[group.id] || [];
+              const hasBoundaryTie = rows.some(r => r.isTieBoundary);
+              const hasTies = rows.some(r => r.needsAdminDecision);
+              const hasAdminOverride = group.manualRankings && Object.keys(group.manualRankings).length > 0;
+
               return (
-                <div key={group.id} className="bg-white rounded-2xl border border-slate-150 p-5 card-shadow" id={`standing-card-${group.id}`}>
-                  <div className="flex items-center justify-between mb-3">
-                    <span className="font-extrabold text-navy text-sm">{group.name}</span>
-                    <span className="text-[10px] text-navy bg-neon/15 px-2.5 py-0.5 rounded-full font-extrabold border border-neon/30">
-                      Qualify: Top {settings.playersQualifyingPerGroup}
-                    </span>
+                <div key={group.id} className="bg-white rounded-2xl border border-slate-150 p-5 card-shadow space-y-3" id={`standing-card-${group.id}`}>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span className="font-extrabold text-navy text-sm">{group.name}</span>
+                      {hasAdminOverride && (
+                        <span className="px-2 py-0.5 bg-amber-50 text-amber-800 border border-amber-300 rounded text-[10px] font-bold" title={group.manualRankingReason || 'Keputusan Admin'}>
+                          ⚖️ Intervensi Admin
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {isAdmin && (hasTies || hasAdminOverride) && (
+                        <button
+                          type="button"
+                          onClick={() => openAdminTieModal(group)}
+                          disabled={lockStatus.isLocked}
+                          className={`px-2.5 py-1 bg-amber-100 hover:bg-amber-200 text-amber-900 border border-amber-300 rounded-lg text-[10px] font-extrabold transition flex items-center gap-1 ${
+                            lockStatus.isLocked ? 'opacity-40 cursor-not-allowed' : ''
+                          }`}
+                          title="Atur urutan peringkat manual untuk menyelesaikan tie-breaker"
+                          id={`btn-tie-breaker-${group.id}`}
+                        >
+                          <ShieldAlert className="h-3 w-3 text-amber-700" /> Atur Peringkat
+                        </button>
+                      )}
+                      <span className="text-[10px] text-navy bg-neon/15 px-2.5 py-0.5 rounded-full font-extrabold border border-neon/30">
+                        Qualify: Top {settings.playersQualifyingPerGroup}
+                      </span>
+                    </div>
                   </div>
+
+                  {hasBoundaryTie && (
+                    <div className="bg-rose-50 border border-rose-200 rounded-xl p-2.5 text-xs text-rose-800 flex items-start gap-2" id={`boundary-tie-alert-${group.id}`}>
+                      <span className="text-base leading-none">⚠️</span>
+                      <div>
+                        <strong className="font-bold block">Seri di Batas Kelolosan!</strong>
+                        <span className="text-[11px]">
+                          Peserta di batas kelolosan (Posisi {settings.playersQualifyingPerGroup}) memiliki statistik & H2H seimbang. Klik "Atur Peringkat" untuk keputusan admin.
+                        </span>
+                      </div>
+                    </div>
+                  )}
 
                   <div className="overflow-x-auto" id={`standing-table-container-${group.id}`}>
                     <table className="w-full text-left border-collapse" id={`standing-table-${group.id}`}>
@@ -1132,15 +1340,22 @@ export default function DivisionRoundRobin({ division, onUpdateDivision, isAdmin
                                   {row.rank}
                                 </span>
                               </td>
-                              <td className="p-2 font-semibold text-slate-700 truncate max-w-[120px]" title={row.entryName}>
-                                <div className="flex items-center gap-1.5">
-                                  <span className="truncate">{row.entryName}</span>
-                                  {row.needsAdminDecision && (
-                                    <span 
-                                      className="inline-flex items-center justify-center text-[9px] text-rose-600 font-extrabold bg-rose-50 border border-rose-200 px-1 py-0.5 rounded cursor-help shrink-0" 
-                                      title="Seri Sempurna! Peringkat sama persis setelah seluruh kriteria tie-breaker. Perlu keputusan manual admin saat penyusunan bracket."
-                                    >
-                                      ⚠️ TIE
+                              <td className="p-2 font-semibold text-slate-700 max-w-[160px]" title={row.tieBreakReason || row.entryName}>
+                                <div className="flex flex-col">
+                                  <div className="flex items-center gap-1.5">
+                                    <span className="truncate">{row.entryName}</span>
+                                    {row.needsAdminDecision && !group.manualRankings && (
+                                      <span 
+                                        className="inline-flex items-center justify-center text-[9px] text-rose-600 font-extrabold bg-rose-50 border border-rose-200 px-1 py-0.5 rounded cursor-help shrink-0" 
+                                        title="Seri Sempurna! Peringkat sama persis. Perlu keputusan manual admin."
+                                      >
+                                        ⚠️ TIE
+                                      </span>
+                                    )}
+                                  </div>
+                                  {row.tieBreakReason && (
+                                    <span className="text-[10px] text-slate-400 font-normal truncate">
+                                      {row.tieBreakReason}
                                     </span>
                                   )}
                                 </div>
@@ -2058,6 +2273,126 @@ export default function DivisionRoundRobin({ division, onUpdateDivision, isAdmin
                 </button>
               )}
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ADMIN TIE-BREAKER / RANK DECISION MODAL */}
+      {adminTieGroup && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fade-in" id="admin-tie-modal">
+          <div className="bg-white rounded-2xl border border-slate-150 shadow-2xl max-w-md w-full p-6 space-y-5" id="admin-tie-modal-content">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-150">
+              <div className="flex items-center gap-2">
+                <ShieldAlert className="h-5 w-5 text-amber-600" />
+                <h3 className="font-extrabold text-navy text-base">Keputusan Admin: Peringkat {adminTieGroup.name}</h3>
+              </div>
+              <button onClick={() => setAdminTieGroup(null)} className="text-slate-400 hover:text-slate-600 p-1 rounded">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <form onSubmit={saveAdminTieDecision} className="space-y-4">
+              <div className="text-xs text-slate-600 bg-amber-50 p-3 rounded-xl border border-amber-200 leading-relaxed">
+                <p className="font-bold text-amber-900 mb-1">Panduan Intervensi Peringkat Admin:</p>
+                Gunakan tombol panah ⬆️ / ⬇️ untuk menyesuaikan urutan peringkat akhir peserta dalam grup ini. Tuliskan alasan panitia yang sah.
+              </div>
+
+              {/* List of peserta with Up/Down buttons */}
+              <div className="space-y-2 max-h-[260px] overflow-y-auto pr-1">
+                {adminTieOrder.map((entryId, idx) => {
+                  const entry = entries.find(e => e.id === entryId);
+                  const entryName = entry ? `${entry.name1}${entry.name2 ? ` / ${entry.name2}` : ''}` : 'Unknown';
+                  const row = standingsByGroup[adminTieGroup.id]?.find(r => r.entryId === entryId);
+
+                  return (
+                    <div
+                      key={entryId}
+                      className="flex items-center justify-between p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs"
+                    >
+                      <div className="flex items-center gap-2.5">
+                        <span className="w-6 h-6 rounded-full bg-navy text-neon text-[10px] font-black flex items-center justify-center shrink-0">
+                          {idx + 1}
+                        </span>
+                        <div>
+                          <p className="font-bold text-slate-800">{entryName}</p>
+                          {row && (
+                            <p className="text-[10px] text-slate-500 font-mono">
+                              {row.won}W - {row.lost}L • {row.pointsFor}PF • Diff {row.pointDifference > 0 ? `+${row.pointDifference}` : row.pointDifference}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => moveTieOrder(idx, 'up')}
+                          disabled={idx === 0}
+                          className="p-1.5 bg-white hover:bg-slate-100 disabled:opacity-30 border border-slate-200 rounded text-slate-700 font-bold"
+                          title="Naikkan Posisi"
+                        >
+                          ⬆️
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => moveTieOrder(idx, 'down')}
+                          disabled={idx === adminTieOrder.length - 1}
+                          className="p-1.5 bg-white hover:bg-slate-100 disabled:opacity-30 border border-slate-200 rounded text-slate-700 font-bold"
+                          title="Turunkan Posisi"
+                        >
+                          ⬇️
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Mandatory Reason Input */}
+              <div className="space-y-1">
+                <label className="text-xs font-bold text-slate-700 block">
+                  Alasan Keputusan Admin / Panitia <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={adminTieReason}
+                  onChange={(e) => setAdminTieReason(e.target.value)}
+                  placeholder="Contoh: Hasil undian coin toss / Keputusan teknis panitia"
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium focus:ring-2 focus:ring-navy/15 focus:outline-none"
+                />
+              </div>
+
+              <div className="flex items-center justify-between pt-2 border-t border-slate-150">
+                {adminTieGroup.manualRankings ? (
+                  <button
+                    type="button"
+                    onClick={resetAdminTieDecision}
+                    className="text-xs font-bold text-rose-600 hover:text-rose-800 hover:underline"
+                  >
+                    Reset Keputusan Manual
+                  </button>
+                ) : (
+                  <div></div>
+                )}
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setAdminTieGroup(null)}
+                    className="px-4 py-2 text-xs font-semibold text-slate-500 hover:text-slate-800 border border-slate-200 rounded-xl"
+                  >
+                    Batal
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-4 py-2 text-xs font-extrabold bg-navy hover:bg-navy-light text-neon rounded-xl card-shadow"
+                  >
+                    Simpan Keputusan Admin
+                  </button>
+                </div>
+              </div>
+            </form>
           </div>
         </div>
       )}

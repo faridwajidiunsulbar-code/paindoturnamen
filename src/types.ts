@@ -25,6 +25,8 @@ export interface Group {
   id: string; // e.g. "A", "B"
   name: string; // e.g. "Grup A", "Grup B"
   entryIds: string[];
+  manualRankings?: Record<string, number>; // entryId -> override rank (1, 2, 3...)
+  manualRankingReason?: string; // Reason for manual tie resolution
 }
 
 export type MatchStatus = 'belum_dimainkan' | 'selesai' | 'walkover';
@@ -132,4 +134,6 @@ export interface GroupStandingRow {
   rank: number;
   manualOverrideRank?: number; // Admin manual tie-breaker rank
   needsAdminDecision?: boolean; // Penanda jika tie-breaker seri sempurna dan perlu keputusan manual/admin
+  tieBreakReason?: string; // Penjelasan alasan urutan/kriteria peringkat
+  isTieBoundary?: boolean; // Penanda jika seri terjadi di batas kelolosan
 }

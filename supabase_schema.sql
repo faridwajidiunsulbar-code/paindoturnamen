@@ -104,6 +104,8 @@ create table if not exists public.division_groups (
     tournament_id text references public.tournaments(id) on delete cascade not null,
     division_id text references public.divisions(id) on delete cascade not null,
     name text not null, -- 'A', 'B', 'C', etc.
+    manual_rankings jsonb,
+    manual_ranking_reason text,
     created_at timestamp with time zone default timezone('utc'::text, now()) not null
 );
 

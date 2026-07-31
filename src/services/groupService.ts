@@ -191,11 +191,14 @@ export async function saveGroupsAndMembersToSupabase(
       const dbDivId = getDbDivisionId(div.id, tournament.id);
       div.groups.forEach(g => {
         const dbGrpId = getDbGroupId(g.id, dbDivId);
+        const hasManualRankings = g.manualRankings && typeof g.manualRankings === 'object' && Object.keys(g.manualRankings).length > 0;
         uniqueGroupsMap.set(dbGrpId, {
           id: dbGrpId,
           tournament_id: tournament.id,
           division_id: dbDivId,
-          name: g.name
+          name: g.name,
+          manual_rankings: hasManualRankings ? g.manualRankings : null,
+          manual_ranking_reason: g.manualRankingReason?.trim() || null
         });
       });
     });

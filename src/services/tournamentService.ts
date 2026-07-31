@@ -254,10 +254,40 @@ export async function loadTournamentFromSupabase(tournamentId: string): Promise<
           if (!dbName.toLowerCase().startsWith('grup') && !dbName.toLowerCase().startsWith('pool')) {
             groupName = dbName.length <= 2 ? `Grup ${dbName}` : dbName;
           }
+          // Validate cloud manual_rankings
+          let validatedManualRankings: Record<string, number> | undefined = undefined;
+          if (g.manual_rankings && typeof g.manual_rankings === 'object' && !Array.isArray(g.manual_rankings)) {
+            const entriesInGroupSet = new Set(memberIds);
+            const keys = Object.keys(g.manual_rankings);
+            const seenRanks = new Set<number>();
+            let isValid = keys.length > 0;
+
+            for (const entryId of keys) {
+              if (!entriesInGroupSet.has(entryId)) {
+                isValid = false;
+                break;
+              }
+              const rank = g.manual_rankings[entryId];
+              if (!Number.isInteger(rank) || rank <= 0 || seenRanks.has(rank)) {
+                isValid = false;
+                break;
+              }
+              seenRanks.add(rank);
+            }
+
+            if (isValid) {
+              validatedManualRankings = g.manual_rankings;
+            } else {
+              console.warn(`[Integrity Warning] Invalid manual_rankings ignored for group ${g.id}:`, g.manual_rankings);
+            }
+          }
+
           return {
             id: g.id,
             name: groupName,
-            entryIds: memberIds
+            entryIds: memberIds,
+            manualRankings: validatedManualRankings,
+            manualRankingReason: g.manual_ranking_reason?.trim() || undefined
           };
         });
 

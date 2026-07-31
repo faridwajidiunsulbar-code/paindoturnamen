@@ -59,22 +59,47 @@ export default function GroupStandingsCards({
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {groups.map(group => {
-          const rows: GroupStandingRow[] = calculateGroupStandings(group, roundRobinMatches, entries);
           const topQualify = settings?.playersQualifyingPerGroup || 2;
+          const rows: GroupStandingRow[] = calculateGroupStandings(group, roundRobinMatches, entries, topQualify);
+          const hasBoundaryTie = rows.some(r => r.isTieBoundary);
+          const hasAdminOverride = group.manualRankings && Object.keys(group.manualRankings).length > 0;
 
           return (
             <div
               key={group.id}
-              className="bg-white rounded-2xl border border-slate-200 p-5 card-shadow hover:border-slate-300 transition-colors"
+              className="bg-white rounded-2xl border border-slate-200 p-5 card-shadow hover:border-slate-300 transition-colors space-y-3"
               id={`group-card-${group.id}`}
             >
               {/* Card Header: Group Name + Qualify Badge */}
-              <div className="flex items-center justify-between mb-4">
-                <h5 className="font-extrabold text-navy text-base tracking-tight">{group.name}</h5>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <h5 className="font-extrabold text-navy text-base tracking-tight">{group.name}</h5>
+                  {hasAdminOverride && (
+                    <span
+                      className="px-2 py-0.5 bg-amber-50 text-amber-800 border border-amber-300 rounded text-[10px] font-bold"
+                      title={group.manualRankingReason || 'Keputusan Admin/Panitia'}
+                    >
+                      ⚖️ Keputusan Admin
+                    </span>
+                  )}
+                </div>
                 <span className="text-[11px] font-extrabold px-3 py-1 bg-lime-100 text-lime-900 border border-lime-300/80 rounded-full shadow-2xs">
                   Qualify: Top {topQualify}
                 </span>
               </div>
+
+              {/* Warning Banner for Boundary Tie */}
+              {hasBoundaryTie && (
+                <div className="bg-rose-50 border border-rose-200 rounded-xl p-2.5 text-xs text-rose-800 flex items-start gap-2">
+                  <span className="text-base leading-none">⚠️</span>
+                  <div>
+                    <strong className="font-bold block">Seri di Batas Kelolosan!</strong>
+                    <span className="text-[11px]">
+                      Peserta di batas kelolosan (Posisi {topQualify}) memiliki statistik & H2H seimbang. Keputusan admin diperlukan.
+                    </span>
+                  </div>
+                </div>
+              )}
 
               {/* Table */}
               <div className="overflow-x-auto">
@@ -114,15 +139,22 @@ export default function GroupStandingsCards({
                               {row.rank}
                             </span>
                           </td>
-                          <td className="p-2 font-semibold text-slate-800 truncate max-w-[140px]" title={row.entryName}>
-                            <div className="flex items-center gap-1.5">
-                              <span className="truncate">{row.entryName}</span>
-                              {row.needsAdminDecision && (
-                                <span
-                                  className="inline-flex items-center justify-center text-[9px] text-rose-600 font-extrabold bg-rose-50 border border-rose-200 px-1 py-0.5 rounded shrink-0"
-                                  title="Seri Sempurna! Peringkat sama persis. Perlu keputusan admin."
-                                >
-                                  ⚠️ TIE
+                          <td className="p-2 font-semibold text-slate-800 max-w-[180px]" title={row.tieBreakReason || row.entryName}>
+                            <div className="flex flex-col">
+                              <div className="flex items-center gap-1.5">
+                                <span className="truncate">{row.entryName}</span>
+                                {row.needsAdminDecision && !group.manualRankings && (
+                                  <span
+                                    className="inline-flex items-center justify-center text-[9px] text-rose-700 font-extrabold bg-rose-50 border border-rose-200 px-1 py-0.5 rounded shrink-0"
+                                    title="Seri! Perlu keputusan admin."
+                                  >
+                                    ⚠️ TIE
+                                  </span>
+                                )}
+                              </div>
+                              {row.tieBreakReason && (
+                                <span className="text-[10px] text-slate-400 font-normal truncate">
+                                  {row.tieBreakReason}
                                 </span>
                               )}
                             </div>

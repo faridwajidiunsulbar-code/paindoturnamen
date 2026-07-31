@@ -42,7 +42,7 @@ export default function DivisionKnockout({ division, onUpdateDivision, isAdmin =
   // 1. COMPUTE AUTOMATIC RECOMMENDATIONS
   const standingsByGroup: Record<string, GroupStandingRow[]> = {};
   groups.forEach(g => {
-    standingsByGroup[g.id] = calculateGroupStandings(g, roundRobinMatches, entries);
+    standingsByGroup[g.id] = calculateGroupStandings(g, roundRobinMatches, entries, settings.playersQualifyingPerGroup || 2);
   });
 
   const { direct, wildcards, nextBestList } = getWildcardRecommendations(
@@ -53,13 +53,46 @@ export default function DivisionKnockout({ division, onUpdateDivision, isAdmin =
 
   const recommendedIds = [...direct, ...wildcards].slice(0, settings.bracketSize);
 
+  // Helper check for Group Phase completion & resolved tie-breakers
+  const checkGroupPhaseReadiness = (): boolean => {
+    // 1. Check unplayed RR matches
+    const unplayedCount = roundRobinMatches.filter(m => m.status === 'belum_dimainkan').length;
+    if (unplayedCount > 0) {
+      setShowAlert({
+        title: 'Fase Grup Belum Selesai ⚠️',
+        message: `Tidak dapat memproses kelolosan final: Masih terdapat ${unplayedCount} dari ${roundRobinMatches.length} pertandingan fase grup yang belum dimainkan. Selesaikan seluruh pertandingan fase grup terlebih dahulu.`
+      });
+      return false;
+    }
+
+    // 2. Check unresolved boundary ties
+    const groupsWithBoundaryTies = groups.filter(g => {
+      const rows = standingsByGroup[g.id] || [];
+      return rows.some(r => r.isTieBoundary && (!g.manualRankings || !g.manualRankings[r.entryId]));
+    });
+
+    if (groupsWithBoundaryTies.length > 0) {
+      const names = groupsWithBoundaryTies.map(g => g.name).join(', ');
+      setShowAlert({
+        title: 'Keputusan Admin Diperlukan ⚠️',
+        message: `Tidak dapat memproses kelolosan: Terdapat tie/seri pada batas kelolosan di ${names} yang belum memiliki Keputusan Admin. Silakan buka tab Round Robin dan atur peringkat manual untuk grup tersebut.`
+      });
+      return false;
+    }
+
+    return true;
+  };
+
   // Initialize Seeding State if not done yet
   const handleStartSeedingSetup = () => {
+    if (!checkGroupPhaseReadiness()) return;
     setSelectedSeeds(recommendedIds);
   };
 
   // Build bracket with current selected seeds
   const handleGenerateBracket = () => {
+    if (!checkGroupPhaseReadiness()) return;
+
     if (selectedSeeds.length === 0) {
       setShowAlert({
         title: 'Harap Konfirmasi Peserta',
