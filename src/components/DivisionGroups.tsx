@@ -7,7 +7,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { Division, Group, Entry, Match } from '../types';
 import { generateRoundRobinMatches } from '../utils/tournamentHelpers';
 import { checkDivisionGroupLockStatus, validateAndCleanGroups } from '../services/groupService';
-import { Plus, Trash2, ArrowRight, X, Play, RefreshCw, AlertCircle, Sparkles, Lock, Info, CheckCircle2 } from 'lucide-react';
+import { Plus, Trash2, ArrowRight, X, Play, RefreshCw, AlertCircle, Sparkles, Lock, Info, CheckCircle2, ShieldAlert } from 'lucide-react';
 
 interface DivisionGroupsProps {
   division: Division;
@@ -85,6 +85,62 @@ export default function DivisionGroups({ division, onUpdateDivision, isAdmin = t
     title: string;
     message: string;
   } | null>(null);
+
+  // Admin Override / Force Majeure Modal State
+  const [showAdminOverrideModal, setShowAdminOverrideModal] = useState(false);
+  const [overrideReasonCategory, setOverrideReasonCategory] = useState<string>('cedera');
+  const [overrideCustomReason, setOverrideCustomReason] = useState<string>('');
+  const [overrideAction, setOverrideAction] = useState<'reset_scores_only' | 'reset_schedule_and_scores'>('reset_schedule_and_scores');
+
+  const handleExecuteAdminOverride = () => {
+    const finalReason = overrideReasonCategory === 'lainnya' 
+      ? overrideCustomReason.trim()
+      : {
+          cedera: 'Cedera / Mengundurkan Diri Peserta',
+          diskualifikasi: 'Diskualifikasi Peserta oleh Panitia',
+          ketidakhadiran: 'Ketidakhadiran / Walkover (WO)',
+          cuaca_teknis: 'Gangguan Teknis / Kondisi Cuaca',
+          keputusan_panitia: 'Keputusan Panitia / Force Majeure'
+        }[overrideReasonCategory] || overrideReasonCategory;
+
+    if (overrideReasonCategory === 'lainnya' && !finalReason) {
+      setShowAlert({
+        title: 'Alasan Wajib Diisi ⚠️',
+        message: 'Silakan ketik alasan khusus untuk melanjutkan koreksi darurat ini.'
+      });
+      return;
+    }
+
+    if (overrideAction === 'reset_scores_only') {
+      const resetMatches: Match[] = (roundRobinMatches || []).map(m => ({
+        ...m,
+        score1: null,
+        score2: null,
+        winnerId: null,
+        status: 'belum_dimainkan',
+        isFinished: false
+      }));
+      onUpdateDivision({
+        ...division,
+        roundRobinMatches: resetMatches
+      });
+      setShowAlert({
+        title: 'Skor Fase Grup Berhasil Direset ✅',
+        message: `Tindakan Override Admin (${finalReason}): Skor dari ${resetMatches.length} pertandingan round-robin telah dikosongkan. Jadwal dan susunan grup dipertahankan.`
+      });
+    } else {
+      onUpdateDivision({
+        ...division,
+        roundRobinMatches: []
+      });
+      setShowAlert({
+        title: 'Jadwal & Skor Fase Grup Berhasil Direset ✅',
+        message: `Tindakan Override Admin (${finalReason}): Seluruh jadwal (${(roundRobinMatches || []).length} pertandingan) dan skor fase grup telah dihapus. Susunan grup kini dapat diubah.`
+      });
+    }
+
+    setShowAdminOverrideModal(false);
+  };
 
   // Check if modification is blocked by lock status
   const checkModificationAllowed = (): boolean => {
@@ -392,12 +448,25 @@ export default function DivisionGroups({ division, onUpdateDivision, isAdmin = t
       
       {/* STATUS BANNER IF LOCKED */}
       {lockStatus.isLocked && (
-        <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 flex items-start gap-3 shadow-xs" id="groups-locked-banner">
-          <Lock className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
-          <div className="space-y-1 text-xs">
-            <h4 className="font-extrabold text-amber-900">Pembagian Grup Terkunci</h4>
-            <p className="text-amber-800 leading-relaxed">{lockStatus.reason}</p>
+        <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-xs" id="groups-locked-banner">
+          <div className="flex items-start gap-3">
+            <Lock className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
+            <div className="space-y-1 text-xs">
+              <h4 className="font-extrabold text-amber-900">Pembagian Grup Terkunci</h4>
+              <p className="text-amber-800 leading-relaxed">{lockStatus.reason}</p>
+            </div>
           </div>
+          {isAdmin && (
+            <button
+              type="button"
+              onClick={() => setShowAdminOverrideModal(true)}
+              className="px-3.5 py-2 rounded-xl text-xs font-extrabold bg-rose-600 hover:bg-rose-700 text-white border border-rose-700 shrink-0 shadow-xs transition flex items-center gap-1.5"
+              id="admin-override-trigger-button"
+            >
+              <ShieldAlert className="h-4 w-4" />
+              Override Admin / Force Majeure
+            </button>
+          )}
         </div>
       )}
 
@@ -702,6 +771,148 @@ export default function DivisionGroups({ division, onUpdateDivision, isAdmin = t
                 id="alert-close-button"
               >
                 Mengerti
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ADMIN OVERRIDE / FORCE MAJEURE MODAL */}
+      {showAdminOverrideModal && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fade-in" id="admin-override-modal">
+          <div className="bg-white rounded-2xl max-w-lg w-full border border-slate-150 p-6 shadow-2xl space-y-5 animate-scale-up" id="admin-override-card">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2">
+                <ShieldAlert className="h-5 w-5 text-rose-600" />
+                <h3 className="text-base font-extrabold text-slate-900">Override Admin & Force Majeure</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowAdminOverrideModal(false)}
+                className="text-slate-400 hover:text-slate-600 transition"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="space-y-4 text-xs">
+              {/* Category Reason */}
+              <div className="space-y-1.5">
+                <label className="font-bold text-slate-700 block">Kategori Alasan Koreksi / Force Majeure <span className="text-rose-500">*</span></label>
+                <select
+                  value={overrideReasonCategory}
+                  onChange={(e) => setOverrideReasonCategory(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-rose-500"
+                  id="override-reason-select"
+                >
+                  <option value="cedera">Cedera / Mengundurkan Diri Peserta</option>
+                  <option value="diskualifikasi">Diskualifikasi Peserta oleh Panitia</option>
+                  <option value="ketidakhadiran">Ketidakhadiran / Walkover (WO)</option>
+                  <option value="cuaca_teknis">Gangguan Teknis / Kondisi Cuaca</option>
+                  <option value="keputusan_panitia">Keputusan Panitia / Force Majeure</option>
+                  <option value="lainnya">Lainnya (Tulis alasan khusus)</option>
+                </select>
+              </div>
+
+              {overrideReasonCategory === 'lainnya' && (
+                <div className="space-y-1.5">
+                  <label className="font-bold text-slate-700 block">Detail Alasan Khusus <span className="text-rose-500">*</span></label>
+                  <input
+                    type="text"
+                    value={overrideCustomReason}
+                    onChange={(e) => setOverrideCustomReason(e.target.value)}
+                    placeholder="Tuliskan alasan spesifik koreksi..."
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-rose-500"
+                    id="override-custom-reason-input"
+                  />
+                </div>
+              )}
+
+              {/* Action Selection */}
+              <div className="space-y-1.5">
+                <label className="font-bold text-slate-700 block">Jenis Aksi Koreksi <span className="text-rose-500">*</span></label>
+                <div className="space-y-2">
+                  <label className="flex items-start gap-2.5 p-3 rounded-xl border border-slate-200 bg-slate-50 cursor-pointer hover:bg-slate-100 transition">
+                    <input
+                      type="radio"
+                      name="overrideAction"
+                      value="reset_schedule_and_scores"
+                      checked={overrideAction === 'reset_schedule_and_scores'}
+                      onChange={() => setOverrideAction('reset_schedule_and_scores')}
+                      className="mt-0.5 text-rose-600 focus:ring-rose-500"
+                    />
+                    <div>
+                      <span className="font-extrabold text-slate-900 block">Reset Jadwal & Skor Fase Grup (Rekomendasi)</span>
+                      <span className="text-slate-500 leading-relaxed block mt-0.5">
+                        Menghapus seluruh jadwal dan skor fase grup. Peserta dan grup dipertahankan sehingga Anda dapat mengubah anggota grup atau generate jadwal baru.
+                      </span>
+                    </div>
+                  </label>
+
+                  <label className="flex items-start gap-2.5 p-3 rounded-xl border border-slate-200 bg-slate-50 cursor-pointer hover:bg-slate-100 transition">
+                    <input
+                      type="radio"
+                      name="overrideAction"
+                      value="reset_scores_only"
+                      checked={overrideAction === 'reset_scores_only'}
+                      onChange={() => setOverrideAction('reset_scores_only')}
+                      className="mt-0.5 text-rose-600 focus:ring-rose-500"
+                    />
+                    <div>
+                      <span className="font-extrabold text-slate-900 block">Reset Seluruh Skor Fase Grup Saja</span>
+                      <span className="text-slate-500 leading-relaxed block mt-0.5">
+                        Mengosongkan skor, pemenang, dan status dari semua pertandingan fase grup. Jadwal dan susunan grup dipertahankan.
+                      </span>
+                    </div>
+                  </label>
+                </div>
+              </div>
+
+              {/* Detailed Impact Report Box */}
+              <div className="p-3.5 bg-rose-50 border border-rose-200 rounded-xl space-y-1.5 text-rose-900">
+                <h4 className="font-extrabold flex items-center gap-1.5 text-xs">
+                  <AlertCircle className="h-4 w-4 text-rose-600 shrink-0" /> Ringkasan Dampak Data
+                </h4>
+                <ul className="list-disc list-inside text-[11px] space-y-1 text-rose-800">
+                  <li>Total pertandingan fase grup terdampak: <strong>{(roundRobinMatches || []).length} pertandingan</strong>.</li>
+                  {overrideAction === 'reset_schedule_and_scores' ? (
+                    <li>Pertandingan dan seluruh skor terinput akan <strong>dihapus permanen dari state fase grup</strong>.</li>
+                  ) : (
+                    <li>Skor terinput pada seluruh pertandingan fase grup akan <strong>dikosongkan menjadi belum dimainkan</strong>.</li>
+                  )}
+                  {lockStatus.hasKnockout && (
+                    <li className="font-semibold text-rose-900">
+                      ⚠️ Fase Knockout terdeteksi telah dibentuk. Reset ini hanya mempengaruhi fase grup; Anda perlu menyesuaikan atau mereset fase Knockout secara terpisah jika diperlukan.
+                    </li>
+                  )}
+                  {lockStatus.hasChampions && (
+                    <li className="font-semibold text-rose-900">
+                      ⚠️ Podium/Juara terdeteksi telah ditetapkan.
+                    </li>
+                  )}
+                  <li className="text-[10px] text-slate-500 italic pt-1 border-t border-rose-200/60">
+                    Catatan Audit: Audit Log terstruktur belum tersedia pada schema Supabase. Tindakan ini akan dicatat dalam sesi log aplikasi dan diterapkan ke state saat disimpan.
+                  </li>
+                </ul>
+              </div>
+            </div>
+
+            <div className="flex gap-3 justify-end pt-2">
+              <button
+                type="button"
+                onClick={() => setShowAdminOverrideModal(false)}
+                className="px-4 py-2 text-xs font-semibold text-slate-500 hover:text-slate-800 hover:bg-slate-50 border border-slate-200 rounded-xl transition"
+                id="admin-override-cancel-button"
+              >
+                Batalkan
+              </button>
+              <button
+                type="button"
+                onClick={handleExecuteAdminOverride}
+                className="px-4 py-2 text-xs font-extrabold bg-rose-600 hover:bg-rose-700 text-white border border-rose-700 rounded-xl shadow-xs transition"
+                id="admin-override-submit-button"
+              >
+                Konfirmasi & Eksekusi Koreksi Admin
               </button>
             </div>
           </div>
