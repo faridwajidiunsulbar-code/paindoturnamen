@@ -67,6 +67,7 @@ export interface DivisionSettings {
   bracketSize: 4 | 8 | 16 | 32;
   wildcardActive: boolean;
   byeActive: boolean;
+  /** @deprecated Deprecated legacy boolean. Use thirdPlaceMode as single source of truth. */
   thirdPlaceEnabled?: boolean;
   thirdPlaceMode?: ThirdPlaceMode;
 }

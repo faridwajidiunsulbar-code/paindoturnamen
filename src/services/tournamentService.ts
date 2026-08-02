@@ -1,5 +1,5 @@
 import { supabase, isSupabaseConfigured } from '../lib/supabaseClient';
-import { Tournament, Division, TournamentEvent, AgeGroup, Entry, Group, Match, Champions, KnockoutStage, KnockoutSlot, ServiceResult, OfficialPodium, PodiumEntry, PodiumPlacement } from '../types';
+import { Tournament, Division, TournamentEvent, AgeGroup, Entry, Group, Match, Champions, KnockoutStage, KnockoutSlot, ServiceResult, OfficialPodium, PodiumEntry, PodiumPlacement, ThirdPlaceMode } from '../types';
 import { saveDivisionsToSupabase, loadDivisionsForTournament } from './divisionService';
 import { saveEntriesToSupabase, loadEntriesForTournament } from './entryService';
 import { saveGroupsAndMembersToSupabase, loadGroupsForTournament } from './groupService';
@@ -779,6 +779,16 @@ export async function loadTournamentFromSupabase(tournamentId: string): Promise<
       const matchedEv = events.find(e => e.id === div.match_type_id);
       const matchedAg = ageGroups.find(a => a.id === div.age_group_id);
 
+      const rawMode = div.third_place_mode;
+      const derivedThirdPlaceMode: ThirdPlaceMode =
+        rawMode === 'shared_bronze' || rawMode === 'playoff' || rawMode === 'none'
+          ? rawMode
+          : div.third_place_enabled === true
+            ? 'playoff'
+            : div.third_place_enabled === false
+              ? 'none'
+              : 'playoff';
+
       return {
         id: div.id,
         eventId: div.match_type_id,
@@ -794,8 +804,8 @@ export async function loadTournamentFromSupabase(tournamentId: string): Promise<
           bracketSize: div.knockout_size as any,
           wildcardActive: div.wildcard_enabled,
           byeActive: div.bye_enabled,
-          thirdPlaceEnabled: div.third_place_mode ? div.third_place_mode !== 'none' : (div.third_place_enabled !== false),
-          thirdPlaceMode: (div.third_place_mode as any) || (div.third_place_enabled === false ? 'none' : 'playoff')
+          thirdPlaceEnabled: derivedThirdPlaceMode !== 'none',
+          thirdPlaceMode: derivedThirdPlaceMode
         },
         entries: divEntries,
         groups: divGroups,
