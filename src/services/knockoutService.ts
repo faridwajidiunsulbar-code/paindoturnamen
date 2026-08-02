@@ -20,12 +20,7 @@ export async function saveKnockoutSlotsAndChampionsToSupabase(
   }
 
   try {
-    // 1. Delete existing champions and knockout slots for cleanup
-    const { error: delChampError } = await supabase.from('champions').delete().eq('tournament_id', tournament.id);
-    if (delChampError) {
-      return { success: false, error: { module: 'knockout', operation: 'delete', message: delChampError.message, details: JSON.stringify(delChampError) } };
-    }
-
+    // 1. Cleanup knockout slots for tournament
     const { error: delSlotError } = await supabase.from('knockout_slots').delete().eq('tournament_id', tournament.id);
     if (delSlotError) {
       return { success: false, error: { module: 'knockout', operation: 'delete', message: delSlotError.message, details: JSON.stringify(delSlotError) } };
@@ -91,11 +86,55 @@ export async function saveKnockoutSlotsAndChampionsToSupabase(
       }
     }
 
-    // 3. Insert Champions
+    // 3. Process Champions (Canonical multi-row & soft revoke per division)
     const allChampions: any[] = [];
-    validActiveDivisions.forEach(div => {
+    for (const div of validActiveDivisions) {
       const dbDivId = getDbDivisionId(div.id, tournament.id);
-      if (div.champions) {
+
+      if (div.podiumOfficial && div.officialPodium && div.officialPodium.entries) {
+        // Soft-revoke previous active canonical rows for this division
+        await supabase
+          .from('champions')
+          .update({
+            revoked_at: new Date().toISOString(),
+            revoked_reason: 'Pengesahan ulang'
+          })
+          .eq('tournament_id', tournament.id)
+          .eq('division_id', dbDivId)
+          .is('revoked_at', null);
+
+        // Add new canonical active rows
+        div.officialPodium.entries.forEach((pEntry, pIdx) => {
+          const validId = getValidEntryId(pEntry.entryId, insertedEntryIds);
+          if (validId) {
+            allChampions.push({
+              id: `c-${dbDivId}-${pEntry.placement}-${validId}-${pIdx}`,
+              tournament_id: tournament.id,
+              division_id: dbDivId,
+              entry_id: validId,
+              placement: pEntry.placement,
+              placement_label: pEntry.label,
+              is_shared: !!pEntry.isShared,
+              source_match_id: pEntry.sourceMatchId || null,
+              official_at: div.officialPodium?.officialAt || new Date().toISOString(),
+              official_by: div.officialBy || div.officialPodium?.officialBy || null,
+              revoked_at: null,
+              revoked_reason: null
+            });
+          }
+        });
+      } else if (div.revokedAt && !div.podiumOfficial) {
+        // Soft-revoke active canonical rows for this division
+        await supabase
+          .from('champions')
+          .update({
+            revoked_at: div.revokedAt,
+            revoked_reason: div.podiumRevokedReason || 'Pencabutan pengesahan oleh admin'
+          })
+          .eq('tournament_id', tournament.id)
+          .eq('division_id', dbDivId)
+          .is('revoked_at', null);
+      } else if (div.champions) {
         allChampions.push({
           id: `c-${dbDivId}`,
           tournament_id: tournament.id,
@@ -105,7 +144,7 @@ export async function saveKnockoutSlotsAndChampionsToSupabase(
           third_place_entry_id: getValidEntryId(div.champions.thirdPlaceEntryId, insertedEntryIds)
         });
       }
-    });
+    }
 
     if (allChampions.length > 0) {
       const { error: champError } = await supabase.from('champions').upsert(allChampions);

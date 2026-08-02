@@ -1,5 +1,5 @@
 import { supabase, isSupabaseConfigured } from '../lib/supabaseClient';
-import { Tournament, Division, TournamentEvent, AgeGroup, Entry, Group, Match, Champions, KnockoutStage, KnockoutSlot, ServiceResult } from '../types';
+import { Tournament, Division, TournamentEvent, AgeGroup, Entry, Group, Match, Champions, KnockoutStage, KnockoutSlot, ServiceResult, OfficialPodium, PodiumEntry, PodiumPlacement } from '../types';
 import { saveDivisionsToSupabase, loadDivisionsForTournament } from './divisionService';
 import { saveEntriesToSupabase, loadEntriesForTournament } from './entryService';
 import { saveGroupsAndMembersToSupabase, loadGroupsForTournament } from './groupService';
@@ -698,15 +698,51 @@ export async function loadTournamentFromSupabase(tournamentId: string): Promise<
         };
       }
 
-      // Division Champions
-      const dChamp = (champData || []).find((c: any) => c.division_id === div.id);
+      // Division Champions & Podium Official
+      const divChamps = (champData || []).filter((c: any) => c.division_id === div.id);
+      const activeCanonicalRows = divChamps
+        .filter((c: any) => c.revoked_at === null && c.entry_id !== null && c.placement !== null)
+        .sort((a: any, b: any) => (a.placement || 0) - (b.placement || 0));
+
       let champions: Champions | null = null;
-      if (dChamp) {
-        champions = {
-          firstPlaceEntryId: dChamp.champion_entry_id,
-          secondPlaceEntryId: dChamp.runner_up_entry_id,
-          thirdPlaceEntryId: dChamp.third_place_entry_id
+      let officialPodium: OfficialPodium | null = null;
+      let podiumOfficial = !!div.podium_official;
+
+      if (activeCanonicalRows.length > 0) {
+        podiumOfficial = true;
+        const entries: PodiumEntry[] = activeCanonicalRows.map((r: any) => ({
+          placement: r.placement as PodiumPlacement,
+          entryId: r.entry_id,
+          label: r.placement_label || (r.placement === 1 ? 'Juara' : (r.placement === 2 ? 'Runner-up' : (r.is_shared ? 'Juara 3 Bersama' : 'Juara 3'))),
+          sourceType: r.source_type || (r.placement === 1 ? 'final_winner' : (r.placement === 2 ? 'final_loser' : (r.is_shared ? 'semifinal_loser' : 'third_place_winner'))),
+          sourceMatchId: r.source_match_id || '',
+          isShared: !!r.is_shared
+        }));
+
+        officialPodium = {
+          officialAt: activeCanonicalRows[0].official_at || div.official_at || new Date().toISOString(),
+          officialBy: activeCanonicalRows[0].official_by || null,
+          entries
         };
+
+        const p1 = entries.find(e => e.placement === 1);
+        const p2 = entries.find(e => e.placement === 2);
+        const p3 = entries.find(e => e.placement === 3);
+
+        champions = {
+          firstPlaceEntryId: p1 ? p1.entryId : null,
+          secondPlaceEntryId: p2 ? p2.entryId : null,
+          thirdPlaceEntryId: p3 ? p3.entryId : null
+        };
+      } else {
+        const legacyRow = divChamps.find((c: any) => c.champion_entry_id || c.runner_up_entry_id || c.third_place_entry_id);
+        if (legacyRow) {
+          champions = {
+            firstPlaceEntryId: legacyRow.champion_entry_id,
+            secondPlaceEntryId: legacyRow.runner_up_entry_id,
+            thirdPlaceEntryId: legacyRow.third_place_entry_id
+          };
+        }
       }
 
       // Division Event and Age details
@@ -735,7 +771,14 @@ export async function loadTournamentFromSupabase(tournamentId: string): Promise<
         groups: divGroups,
         roundRobinMatches,
         knockoutStage,
-        champions
+        champions,
+        podiumOfficial,
+        officialAt: div.official_at || officialPodium?.officialAt || null,
+        officialBy: officialPodium?.officialBy || null,
+        officialPodium,
+        revokedAt: div.revoked_at || null,
+        podiumRevokedReason: div.podium_revoked_reason || null,
+        status: div.status || (podiumOfficial ? 'completed' : (knockoutStage ? 'knockout_stage' : (divGroups.length > 0 ? 'group_stage' : 'pending')))
       };
     });
 

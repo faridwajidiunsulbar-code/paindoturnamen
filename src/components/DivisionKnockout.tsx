@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { Division, Match, Entry, GroupStandingRow, KnockoutStage, Champions, KnockoutSlot, BracketArrangementMode, GroupCrossPairing, ManualSlotAssignment, ThirdPlaceMode, DivisionSettings } from '../types';
+import { Division, Match, Entry, GroupStandingRow, KnockoutStage, Champions, KnockoutSlot, BracketArrangementMode, GroupCrossPairing, ManualSlotAssignment, ThirdPlaceMode, DivisionSettings, OfficialPodium, PodiumEntry, PodiumPlacement } from '../types';
 import { calculateGroupStandings, getDirectQualifiers, getWildcardCandidateRankings, buildSeedingAndSlots, generateKnockoutBracket, propagateKnockoutResult } from '../utils/tournamentHelpers';
 import {
   getBracketHalf,
@@ -20,6 +20,7 @@ import {
   resolveAutoAdvanceByes,
   DownstreamImpact
 } from '../utils/knockoutIntegrity';
+import { deriveDivisionPodium, validateDivisionCompletion } from '../utils/podiumHelpers';
 import { Trophy, Check, Edit3, Lock, Unlock, AlertTriangle, ChevronRight, RefreshCw, X, Shuffle, Settings, Layers, UserCheck, ShieldCheck, RotateCcw, Medal, Award } from 'lucide-react';
 
 interface DivisionKnockoutProps {
@@ -30,6 +31,13 @@ interface DivisionKnockoutProps {
 
 export default function DivisionKnockout({ division, onUpdateDivision, isAdmin = true }: DivisionKnockoutProps) {
   const { entries, groups, roundRobinMatches, settings, knockoutStage, champions } = division;
+
+  // PAINDO-010 Endorsement & Revocation states
+  const [showEndorseModal, setShowEndorseModal] = useState(false);
+  const [endorseConfirmChecked, setEndorseConfirmChecked] = useState(false);
+  const [endorseBy, setEndorseBy] = useState('');
+  const [showRevokeModal, setShowRevokeModal] = useState(false);
+  const [revokeReason, setRevokeReason] = useState('');
 
   // PAINDO-008E Arrangement States
   const [bracketMode, setBracketMode] = useState<BracketArrangementMode>(
@@ -357,7 +365,128 @@ export default function DivisionKnockout({ division, onUpdateDivision, isAdmin =
   // Save Template Projection / Manual Setup
   const thirdPlaceMode: ThirdPlaceMode = settings.thirdPlaceMode || (settings.thirdPlaceEnabled === false ? 'none' : 'playoff');
 
+  // PAINDO-010 Podium Derivation & Completion Validation
+  const podiumPreview = deriveDivisionPodium(
+    knockoutStage?.matches || [],
+    thirdPlaceMode,
+    entries
+  );
+
+  const completionValidation = validateDivisionCompletion(
+    division,
+    knockoutStage?.matches || [],
+    podiumPreview,
+    division.officialPodium
+  );
+
+  const handleEndorsePodium = () => {
+    if (division.podiumOfficial) {
+      setShowAlert({
+        title: 'Hasil Telah Disahkan',
+        message: 'Hasil divisi ini sudah disahkan sebelumnya.'
+      });
+      return;
+    }
+    if (!completionValidation.canFinalize) {
+      setShowAlert({
+        title: 'Syarat Belum Terpenuhi 🛑',
+        message: `Tidak dapat mengesahkan hasil divisi:\n- ${completionValidation.blockers.join('\n- ')}`
+      });
+      return;
+    }
+    setEndorseConfirmChecked(false);
+    setShowEndorseModal(true);
+  };
+
+  const executeEndorsePodium = () => {
+    if (!endorseConfirmChecked) {
+      setShowAlert({
+        title: 'Konfirmasi Diperlukan',
+        message: 'Harap centang kotak konfirmasi pengesahan.'
+      });
+      return;
+    }
+
+    const now = new Date().toISOString();
+    const officialPodium: OfficialPodium = {
+      officialAt: now,
+      officialBy: endorseBy.trim() || null,
+      entries: podiumPreview.entries
+    };
+
+    const updatedDiv: Division = {
+      ...division,
+      podiumOfficial: true,
+      officialAt: now,
+      officialBy: endorseBy.trim() || null,
+      officialPodium,
+      revokedAt: null,
+      podiumRevokedReason: null,
+      status: 'completed'
+    };
+
+    onUpdateDivision(updatedDiv);
+    setShowEndorseModal(false);
+    setShowAlert({
+      title: 'Pengesahan Berhasil 🎉',
+      message: 'Hasil divisi resmi telah berhasil disahkan dan terkunci.'
+    });
+  };
+
+  const handleRevokePodium = () => {
+    if (!division.podiumOfficial) {
+      setShowAlert({
+        title: 'Belum Disahkan',
+        message: 'Hasil divisi belum disahkan.'
+      });
+      return;
+    }
+    setRevokeReason('');
+    setShowRevokeModal(true);
+  };
+
+  const executeRevokePodium = () => {
+    if (!revokeReason.trim()) {
+      setShowAlert({
+        title: 'Alasan Wajib Diisi',
+        message: 'Harap isi alasan pencabutan pengesahan.'
+      });
+      return;
+    }
+
+    const now = new Date().toISOString();
+    const updatedDiv: Division = {
+      ...division,
+      podiumOfficial: false,
+      revokedAt: now,
+      podiumRevokedReason: revokeReason.trim(),
+      status: 'knockout_stage',
+      officialPodium: division.officialPodium
+        ? {
+            ...division.officialPodium,
+            revokedAt: now,
+            revokedReason: revokeReason.trim()
+          }
+        : null
+    };
+
+    onUpdateDivision(updatedDiv);
+    setShowRevokeModal(false);
+    setShowAlert({
+      title: 'Pengesahan Dibatalkan 🔄',
+      message: 'Status pengesahan telah dicabut (soft-revoke). Bagan dapat diubah kembali.'
+    });
+  };
+
   const handleThirdPlaceModeChange = (newMode: ThirdPlaceMode) => {
+    if (division.podiumOfficial) {
+      setShowAlert({
+        title: 'Hasil Divisi Resmi 🛑',
+        message: 'Kebijakan peringkat tidak dapat diubah karena hasil divisi telah disahkan. Batalkan pengesahan terlebih dahulu.'
+      });
+      return;
+    }
+
     if (hasCompletedMatches) {
       setShowAlert({
         title: 'Perubahan Mode Diblokir 🛑',
@@ -554,6 +683,14 @@ export default function DivisionKnockout({ division, onUpdateDivision, isAdmin =
 
   // Match Scoring Handlers
   const openKoScoreModal = (match: Match) => {
+    if (division.podiumOfficial) {
+      setShowAlert({
+        title: 'Akses Ditolak 🛑',
+        message: 'Hasil divisi telah disahkan. Batalkan pengesahan terlebih dahulu untuk mengoreksi skor.'
+      });
+      return;
+    }
+
     if (!knockoutStage?.arrangementLocked) {
       setShowAlert({
         title: 'Bracket Belum Dikunci ⚠️',
@@ -737,6 +874,14 @@ export default function DivisionKnockout({ division, onUpdateDivision, isAdmin =
   };
 
   const handleResetKoScore = (match: Match) => {
+    if (division.podiumOfficial) {
+      setShowAlert({
+        title: 'Akses Ditolak 🛑',
+        message: 'Hasil divisi telah disahkan. Batalkan pengesahan terlebih dahulu untuk mereset skor.'
+      });
+      return;
+    }
+
     if (!knockoutStage) return;
 
     const impact = getDownstreamImpact(match.id, knockoutStage.matches);
@@ -1700,6 +1845,241 @@ export default function DivisionKnockout({ division, onUpdateDivision, isAdmin =
             )}
           </div>
 
+          {/* PAINDO-010: PENYELESAIAN DIVISI & HASIL RESMI */}
+          <div className="space-y-6 pt-6 border-t border-slate-200 mt-8">
+            {/* Header Section */}
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-2 border-b border-slate-200">
+              <div>
+                <div className="flex items-center gap-2">
+                  <Trophy className="h-5 w-5 text-amber-600" />
+                  <h3 className="text-base font-black text-navy uppercase tracking-wide">
+                    PENYELESAIAN DIVISI & HASIL RESMI
+                  </h3>
+                </div>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Modul penetapan juara, verifikasi podium canonical, dan pengesahan hasil divisi resmi.
+                </p>
+              </div>
+
+              {division.podiumOfficial ? (
+                <div className="flex items-center gap-2 bg-emerald-50 border border-emerald-200 text-emerald-800 px-3 py-1.5 rounded-xl text-xs font-black">
+                  <ShieldCheck className="h-4 w-4 text-emerald-600" />
+                  <span>HASIL DISAHKAN</span>
+                </div>
+              ) : (
+                <div className="flex items-center gap-2 bg-amber-50 border border-amber-200 text-amber-800 px-3 py-1.5 rounded-xl text-xs font-extrabold">
+                  <AlertTriangle className="h-4 w-4 text-amber-600" />
+                  <span>BELUM DISAHKAN</span>
+                </div>
+              )}
+            </div>
+
+            {/* Official Endorsement Status Banner if podiumOfficial */}
+            {division.podiumOfficial && (
+              <div className="bg-emerald-500/10 border-2 border-emerald-500/30 rounded-2xl p-4 sm:p-5 space-y-3 card-shadow">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="flex items-start gap-3">
+                    <div className="p-2.5 bg-emerald-600 text-white rounded-xl shadow-xs shrink-0">
+                      <Award className="h-6 w-6" />
+                    </div>
+                    <div>
+                      <h4 className="text-sm font-black text-emerald-950 uppercase tracking-wide">
+                        HASIL RESMI DIVISI TELAH DISAHKAN
+                      </h4>
+                      <p className="text-xs text-emerald-800 font-medium mt-0.5">
+                        Podium dan peringkat juara telah resmi terkunci secara permanen.
+                      </p>
+                      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] font-mono text-emerald-900 mt-2">
+                        <span>Waktu Pengesahan: <strong>{division.officialAt ? new Date(division.officialAt).toLocaleString('id-ID') : '-'}</strong></span>
+                        {division.officialBy && <span>Oleh Admin: <strong>{division.officialBy}</strong></span>}
+                      </div>
+                    </div>
+                  </div>
+
+                  {isAdmin && (
+                    <button
+                      type="button"
+                      onClick={handleRevokePodium}
+                      className="self-start sm:self-center px-4 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-300 font-extrabold text-xs rounded-xl transition flex items-center gap-1.5 shrink-0"
+                    >
+                      <RotateCcw className="h-4 w-4" />
+                      Batalkan Pengesahan
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Checklists & Preview Grid */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+              {/* Left Column: Checklist Status Penyelasaian */}
+              <div className="bg-white rounded-2xl p-4 sm:p-5 border border-slate-200 card-shadow space-y-4">
+                <div className="flex items-center gap-2 pb-2 border-b border-slate-150">
+                  <UserCheck className="h-4 w-4 text-navy" />
+                  <h4 className="font-extrabold text-xs text-navy uppercase tracking-wider">
+                    CHECKLIST PENYELESAIAN DIVISI
+                  </h4>
+                </div>
+
+                <div className="space-y-2.5 text-xs">
+                  {/* Check 1: Group Stage */}
+                  <div className="flex items-center justify-between p-2.5 bg-slate-50 rounded-xl border border-slate-150">
+                    <span className="font-bold text-slate-700">Fase Grup</span>
+                    {(() => {
+                      const unplayed = (division.roundRobinMatches || []).filter(m => m.status === 'belum_dimainkan').length;
+                      if (division.groups.length === 0) return <span className="text-slate-400 font-mono text-[10px]">TANPA GRUP</span>;
+                      if (unplayed === 0) return <span className="px-2 py-0.5 bg-emerald-100 text-emerald-800 font-extrabold text-[10px] rounded-md flex items-center gap-1"><Check className="h-3 w-3" /> SELESAI</span>;
+                      return <span className="px-2 py-0.5 bg-amber-100 text-amber-800 font-extrabold text-[10px] rounded-md">{unplayed} BELUM</span>;
+                    })()}
+                  </div>
+
+                  {/* Check 2: Bracket Locked */}
+                  <div className="flex items-center justify-between p-2.5 bg-slate-50 rounded-xl border border-slate-150">
+                    <span className="font-bold text-slate-700">Status Bagan</span>
+                    {knockoutStage.isLocked ? (
+                      <span className="px-2 py-0.5 bg-emerald-100 text-emerald-800 font-extrabold text-[10px] rounded-md flex items-center gap-1"><Lock className="h-3 w-3" /> TERKUNCI</span>
+                    ) : (
+                      <span className="px-2 py-0.5 bg-amber-100 text-amber-800 font-extrabold text-[10px] rounded-md flex items-center gap-1"><Unlock className="h-3 w-3" /> UNLOCKED</span>
+                    )}
+                  </div>
+
+                  {/* Check 3: Final Match */}
+                  <div className="flex items-center justify-between p-2.5 bg-slate-50 rounded-xl border border-slate-150">
+                    <span className="font-bold text-slate-700">Pertandingan Final</span>
+                    {(() => {
+                      const finalM = knockoutStage.matches.find(m => m.roundName === 'Final' || (!m.nextMatchNum && !m.isBronzeMatch));
+                      const isDone = finalM && (finalM.status === 'selesai' || finalM.status === 'walkover') && !!finalM.winnerId;
+                      if (isDone) return <span className="px-2 py-0.5 bg-emerald-100 text-emerald-800 font-extrabold text-[10px] rounded-md flex items-center gap-1"><Check className="h-3 w-3" /> SELESAI</span>;
+                      return <span className="px-2 py-0.5 bg-amber-100 text-amber-800 font-extrabold text-[10px] rounded-md">BELUM SELESAI</span>;
+                    })()}
+                  </div>
+
+                  {/* Check 4: Third Place Policy */}
+                  <div className="flex items-center justify-between p-2.5 bg-slate-50 rounded-xl border border-slate-150">
+                    <span className="font-bold text-slate-700">Mode Juara 3</span>
+                    <span className="px-2 py-0.5 bg-indigo-50 text-indigo-800 border border-indigo-200 font-black text-[10px] rounded-md uppercase">
+                      {thirdPlaceMode === 'shared_bronze' ? 'Shared Bronze' : thirdPlaceMode === 'playoff' ? 'Playoff (Perebutan)' : 'Tanpa Juara 3'}
+                    </span>
+                  </div>
+
+                  {/* Check 5: Podium Derivation Validity */}
+                  <div className="flex items-center justify-between p-2.5 bg-slate-50 rounded-xl border border-slate-150">
+                    <span className="font-bold text-slate-700">Derivasi Podium</span>
+                    {podiumPreview.valid ? (
+                      <span className="px-2 py-0.5 bg-emerald-100 text-emerald-800 font-extrabold text-[10px] rounded-md flex items-center gap-1"><Check className="h-3 w-3" /> VALID</span>
+                    ) : (
+                      <span className="px-2 py-0.5 bg-rose-100 text-rose-800 font-extrabold text-[10px] rounded-md">TIDAK VALID</span>
+                    )}
+                  </div>
+                </div>
+
+                {/* Validation Blockers or Warnings */}
+                {completionValidation.blockers.length > 0 && !division.podiumOfficial && (
+                  <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl space-y-1">
+                    <span className="font-extrabold text-[11px] text-amber-900 flex items-center gap-1">
+                      <AlertTriangle className="h-3.5 w-3.5 text-amber-600" /> Syarat Pengesahan Belum Terpenuhi:
+                    </span>
+                    <ul className="list-disc list-inside text-[11px] text-amber-800 space-y-0.5 pl-1">
+                      {completionValidation.blockers.map((b, i) => (
+                        <li key={i}>{b}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {/* Endorse Button for Admin */}
+                {isAdmin && !division.podiumOfficial && (
+                  <button
+                    type="button"
+                    onClick={handleEndorsePodium}
+                    disabled={!completionValidation.canFinalize}
+                    className={`w-full py-2.5 px-4 font-black text-xs rounded-xl card-shadow transition flex items-center justify-center gap-2 ${
+                      completionValidation.canFinalize
+                        ? 'bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer'
+                        : 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                    }`}
+                  >
+                    <ShieldCheck className="h-4 w-4" />
+                    Sahkan Hasil Divisi Ini
+                  </button>
+                )}
+              </div>
+
+              {/* Right Column (2 cols): PREVIEW PODIUM RESMI */}
+              <div className="lg:col-span-2 bg-white rounded-2xl p-4 sm:p-5 border border-slate-200 card-shadow space-y-4">
+                <div className="flex items-center justify-between pb-2 border-b border-slate-150">
+                  <div className="flex items-center gap-2">
+                    <Medal className="h-4 w-4 text-amber-600" />
+                    <h4 className="font-extrabold text-xs text-navy uppercase tracking-wider">
+                      {division.podiumOfficial ? 'PODIUM HASIL RESMI' : 'PREVIEW PODIUM DIVISI'}
+                    </h4>
+                  </div>
+                  <span className="text-[10px] font-mono font-bold text-slate-500">
+                    {podiumPreview.entries.length} Posisi Canonical
+                  </span>
+                </div>
+
+                {podiumPreview.entries.length === 0 ? (
+                  <div className="p-8 text-center bg-slate-50 rounded-xl border border-dashed border-slate-250 text-slate-500 text-xs font-medium space-y-2">
+                    <Trophy className="h-8 w-8 text-slate-300 mx-auto" />
+                    <p>Podium belum dapat dirumuskan. Selesaikan seluruh pertandingan babak final/semifinal/perebutan juara 3 terlebih dahulu.</p>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    {podiumPreview.entries.map((pEntry, idx) => {
+                      const isWinner = pEntry.placement === 1;
+                      const isRunnerUp = pEntry.placement === 2;
+                      const isBronze = pEntry.placement === 3;
+
+                      const bgCard = isWinner
+                        ? 'bg-gradient-to-br from-amber-50 to-amber-100/60 border-amber-300'
+                        : isRunnerUp
+                        ? 'bg-gradient-to-br from-slate-50 to-slate-100 border-slate-300'
+                        : isBronze
+                        ? 'bg-gradient-to-br from-amber-50/50 to-orange-50/50 border-amber-200'
+                        : 'bg-slate-50 border-slate-200';
+
+                      const iconColor = isWinner
+                        ? 'text-amber-500'
+                        : isRunnerUp
+                        ? 'text-slate-400'
+                        : isBronze
+                        ? 'text-amber-700'
+                        : 'text-slate-500';
+
+                      return (
+                        <div key={idx} className={`p-3.5 rounded-xl border ${bgCard} space-y-2 card-shadow`}>
+                          <div className="flex items-center justify-between">
+                            <span className="font-black text-[11px] uppercase tracking-wider text-navy flex items-center gap-1.5">
+                              <Trophy className={`h-4 w-4 ${iconColor}`} />
+                              {pEntry.label}
+                            </span>
+                            <span className="text-[10px] font-mono font-black px-2 py-0.5 rounded-md bg-white border border-slate-200 text-slate-700">
+                              P{pEntry.placement}
+                            </span>
+                          </div>
+
+                          <div className="font-black text-sm text-navy truncate">
+                            {getEntryLabel(pEntry.entryId)}
+                          </div>
+
+                          <div className="flex items-center justify-between text-[10px] font-mono text-slate-500 pt-1 border-t border-slate-200/60">
+                            <span>Sumber: {pEntry.sourceType}</span>
+                            {pEntry.isShared && (
+                              <span className="px-1.5 py-0.2 bg-amber-100 text-amber-800 font-extrabold rounded">
+                                SHARED
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+
         </div>
       )}
 
@@ -2131,7 +2511,7 @@ export default function DivisionKnockout({ division, onUpdateDivision, isAdmin =
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fade-in">
           <div className="bg-white rounded-2xl max-w-md w-full p-6 space-y-4 card-shadow border border-slate-150">
             <h4 className="font-extrabold text-navy text-sm">{showAlert.title}</h4>
-            <p className="text-xs text-slate-600 leading-relaxed">{showAlert.message}</p>
+            <p className="text-xs text-slate-600 leading-relaxed whitespace-pre-line">{showAlert.message}</p>
             <div className="flex justify-end pt-2">
               <button
                 type="button"
@@ -2139,6 +2519,138 @@ export default function DivisionKnockout({ division, onUpdateDivision, isAdmin =
                 className="px-4 py-2 bg-navy hover:bg-navy-light text-neon text-xs font-bold rounded-xl card-shadow"
               >
                 Mengerti
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Endorse Confirmation Modal */}
+      {showEndorseModal && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fade-in">
+          <div className="bg-white rounded-2xl max-w-lg w-full p-6 space-y-4 card-shadow border border-slate-150">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-150">
+              <h4 className="font-extrabold text-navy text-sm flex items-center gap-2">
+                <ShieldCheck className="h-5 w-5 text-emerald-600" />
+                Pengesahan Hasil Resmi Divisi
+              </h4>
+              <button onClick={() => setShowEndorseModal(false)} className="text-slate-400 hover:text-slate-600">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="space-y-3 text-xs text-slate-700">
+              <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-emerald-950 space-y-1">
+                <div className="font-black">Pernyataan Pengesahan Resmi</div>
+                <p>
+                  Dengan mengesahkan hasil divisi ini, seluruh daftar pemenang/podium akan disimpan secara permanen di database cloud (canonical multi-row) dan status divisi dinyatakan <strong>SELESAI (COMPLETED)</strong>.
+                </p>
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-xs font-extrabold text-navy block">Identitas Official / Admin <span className="text-slate-400 font-normal">(Opsional)</span></label>
+                <input
+                  type="text"
+                  value={endorseBy}
+                  onChange={e => setEndorseBy(e.target.value)}
+                  placeholder="Nama / User ID Admin Pengesah"
+                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-navy font-medium"
+                />
+              </div>
+
+              <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
+                <label className="flex items-start gap-2.5 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={endorseConfirmChecked}
+                    onChange={e => setEndorseConfirmChecked(e.target.checked)}
+                    className="mt-0.5 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+                  />
+                  <span className="text-xs font-bold text-slate-800 leading-snug">
+                    Saya telah mereview seluruh hasil pertandingan, verifikasi podium, dan secara resmi mengesahkan hasil divisi ini.
+                  </span>
+                </label>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2 border-t border-slate-150">
+              <button
+                type="button"
+                onClick={() => setShowEndorseModal(false)}
+                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={executeEndorsePodium}
+                disabled={!endorseConfirmChecked}
+                className={`px-4 py-2 font-extrabold text-xs rounded-xl card-shadow transition ${
+                  endorseConfirmChecked
+                    ? 'bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer'
+                    : 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                }`}
+              >
+                Sahkan Hasil Sekarang
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Revoke Confirmation Modal */}
+      {showRevokeModal && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fade-in">
+          <div className="bg-white rounded-2xl max-w-lg w-full p-6 space-y-4 card-shadow border border-slate-150">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-150">
+              <h4 className="font-extrabold text-navy text-sm flex items-center gap-2">
+                <RotateCcw className="h-5 w-5 text-rose-600" />
+                Pencabutan Pengesahan Hasil Divisi
+              </h4>
+              <button onClick={() => setShowRevokeModal(false)} className="text-slate-400 hover:text-slate-600">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="space-y-3 text-xs text-slate-700">
+              <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-rose-950 space-y-1">
+                <div className="font-black">Peringatan Soft-Revoke</div>
+                <p>
+                  Pengesahan divisi akan dibatalkan. Data pengesahan sebelumnya akan diberi status <strong>REVOKED</strong> sebagai riwayat histori, dan bracket akan terbuka kembali untuk koreksi. Skor pertandingan tidak dihapus.
+                </p>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-extrabold text-navy block">Alasan Pencabutan Pengesahan <span className="text-rose-500">*</span></label>
+                <textarea
+                  value={revokeReason}
+                  onChange={e => setRevokeReason(e.target.value)}
+                  placeholder="Contoh: Terdapat koreksi kesalahan penulisan skor pada pertandingan semifinal"
+                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-navy"
+                  rows={3}
+                />
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2 border-t border-slate-150">
+              <button
+                type="button"
+                onClick={() => setShowRevokeModal(false)}
+                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={executeRevokePodium}
+                disabled={!revokeReason.trim()}
+                className={`px-4 py-2 font-extrabold text-xs rounded-xl card-shadow transition ${
+                  revokeReason.trim()
+                    ? 'bg-rose-600 hover:bg-rose-700 text-white cursor-pointer'
+                    : 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                }`}
+              >
+                Batalkan Pengesahan
               </button>
             </div>
           </div>

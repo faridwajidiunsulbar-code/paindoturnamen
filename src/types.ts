@@ -152,6 +152,40 @@ export interface Champions {
   thirdPlaceEntryId: string | null;
 }
 
+export type PodiumPlacement = 1 | 2 | 3 | 4;
+
+export type PodiumSourceType =
+  | 'final_winner'
+  | 'final_loser'
+  | 'semifinal_loser'
+  | 'third_place_winner'
+  | 'third_place_loser';
+
+export interface PodiumEntry {
+  placement: PodiumPlacement;
+  entryId: string;
+  label: 'Juara' | 'Runner-up' | 'Juara 3' | 'Juara 3 Bersama' | 'Peringkat 4';
+  sourceType: PodiumSourceType;
+  sourceMatchId: string;
+  isShared?: boolean;
+}
+
+export interface DivisionPodiumPreview {
+  valid: boolean;
+  entries: PodiumEntry[];
+  errors: string[];
+  warnings: string[];
+  generatedAt: string;
+}
+
+export interface OfficialPodium {
+  officialAt: string;
+  officialBy?: string | null;
+  entries: PodiumEntry[];
+  revokedAt?: string | null;
+  revokedReason?: string | null;
+}
+
 export interface Division {
   id: string; // combination of eventId + ageGroupId (e.g. "ganda_putra-19_plus")
   eventId: string;
@@ -164,6 +198,13 @@ export interface Division {
   roundRobinMatches: Match[];
   knockoutStage: KnockoutStage | null;
   champions: Champions | null;
+  podiumOfficial?: boolean;
+  officialAt?: string | null;
+  officialBy?: string | null;
+  officialPodium?: OfficialPodium | null;
+  revokedAt?: string | null;
+  podiumRevokedReason?: string | null;
+  status?: 'pending' | 'group_stage' | 'knockout_stage' | 'completed' | 'finalized';
 }
 
 export interface Tournament {
