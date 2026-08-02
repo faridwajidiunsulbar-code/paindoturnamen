@@ -75,6 +75,8 @@ create table if not exists public.divisions (
     knockout_size integer default 8 not null,
     wildcard_enabled boolean default false not null,
     bye_enabled boolean default false not null,
+    third_place_enabled boolean default true not null,
+    third_place_mode text default 'playoff' check (third_place_mode is null or third_place_mode in ('shared_bronze', 'playoff', 'none')),
     status text default 'pending' check (status in ('pending', 'group_stage', 'knockout_stage', 'completed')),
     wildcard_manual_rankings jsonb,
     wildcard_manual_reason text,
@@ -154,6 +156,7 @@ create table if not exists public.matches (
     is_walkover boolean default false not null,
     next_match_id text references public.matches(id) on delete set null, -- next round node in KO bracket
     bronze_match_id text references public.matches(id) on delete set null, -- optional bronze match reference
+    notes text, -- walkover reason or system note (e.g., Lolos karena BYE)
     created_at timestamp with time zone default timezone('utc'::text, now()) not null,
     updated_at timestamp with time zone default timezone('utc'::text, now()) not null
 );

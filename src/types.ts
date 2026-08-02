@@ -56,6 +56,8 @@ export interface Match {
   notes?: string;
 }
 
+export type ThirdPlaceMode = 'shared_bronze' | 'playoff' | 'none';
+
 export interface DivisionSettings {
   format: 'RR_KO'; // Round Robin + Knockout
   targetScore: 11 | 15 | 21;
@@ -65,6 +67,8 @@ export interface DivisionSettings {
   bracketSize: 4 | 8 | 16 | 32;
   wildcardActive: boolean;
   byeActive: boolean;
+  thirdPlaceEnabled?: boolean;
+  thirdPlaceMode?: ThirdPlaceMode;
 }
 
 export interface KnockoutSlot {

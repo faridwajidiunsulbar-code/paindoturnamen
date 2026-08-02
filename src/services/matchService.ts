@@ -184,13 +184,22 @@ export async function saveMatchesToSupabase(
           winner_entry_id: getValidEntryId(m.winnerId, insertedEntryIds),
           loser_entry_id: getValidEntryId(m.loserId, insertedEntryIds),
           status: m.status === 'selesai' ? 'completed' : (m.status === 'walkover' ? 'walkover' : 'scheduled'),
-          is_walkover: m.status === 'walkover'
+          is_walkover: m.status === 'walkover',
+          notes: m.notes || null
         });
       });
 
       // Knockout Stage Matches
       if (div.knockoutStage) {
         (div.knockoutStage.matches || []).forEach((m, index) => {
+          const nextMatchId = m.nextMatchNum ? `ko-${dbDivId}-${m.nextMatchNum}` : null;
+          let bronzeMatchId: string | null = null;
+          if (m.roundName === 'Semifinal') {
+            const bracketSize = div.settings.bracketSize;
+            const bronzeNum = bracketSize === 4 ? 4 : (bracketSize === 8 ? 8 : (bracketSize === 16 ? 16 : 32));
+            bronzeMatchId = `ko-${dbDivId}-${bronzeNum}`;
+          }
+
           uniqueMatchesMap.set(m.id, {
             id: m.id,
             tournament_id: tournament.id,
@@ -207,7 +216,9 @@ export async function saveMatchesToSupabase(
             loser_entry_id: getValidEntryId(m.loserId, insertedEntryIds),
             status: m.status === 'selesai' ? 'completed' : (m.status === 'walkover' ? 'walkover' : 'scheduled'),
             is_walkover: m.status === 'walkover',
-            next_match_id: null,
+            next_match_id: nextMatchId,
+            bronze_match_id: bronzeMatchId,
+            notes: m.notes || null
           });
         });
       }

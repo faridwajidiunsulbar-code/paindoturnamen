@@ -137,6 +137,8 @@ export async function saveDivisionsToSupabase(tournament: Tournament): Promise<S
           knockout_size: div.settings.bracketSize,
           wildcard_enabled: div.settings.wildcardActive,
           bye_enabled: div.settings.byeActive,
+          third_place_enabled: div.settings.thirdPlaceMode ? div.settings.thirdPlaceMode !== 'none' : (div.settings.thirdPlaceEnabled !== false),
+          third_place_mode: div.settings.thirdPlaceMode || (div.settings.thirdPlaceEnabled === false ? 'none' : 'playoff'),
           status: div.knockoutStage ? 'knockout_stage' : (div.groups.length > 0 ? 'group_stage' : 'pending'),
           wildcard_manual_rankings: div.knockoutStage?.wildcardManualRankings && typeof div.knockoutStage.wildcardManualRankings === 'object' ? div.knockoutStage.wildcardManualRankings : null,
           wildcard_manual_reason: div.knockoutStage?.wildcardManualReason?.trim() || null,

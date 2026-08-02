@@ -1281,7 +1281,7 @@ export function propagateKnockoutResult(
 
     if (bronzeMatchNum > 0) {
       const bronzeMatch = updated.find(m => m.matchNum === bronzeMatchNum);
-      if (bronzeMatch) {
+      if (bronzeMatch && loserId && loserId !== 'BYE') {
         if (slot === 'player1') {
           bronzeMatch.entryId1 = loserId;
         } else {

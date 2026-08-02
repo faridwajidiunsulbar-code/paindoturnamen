@@ -522,21 +522,32 @@ export async function loadTournamentFromSupabase(tournamentId: string): Promise<
       let knockoutStage: KnockoutStage | null = null;
 
       if (koMatches.length > 0 || (slotData && slotData.some((s: any) => s.division_id === div.id)) || div.bracket_arrangement_mode || div.group_cross_pairings || div.manual_slot_assignments) {
-        const sortedKoMatches: Match[] = koMatches.map((m: any) => ({
-          id: m.id,
-          divisionId: m.division_id,
-          roundName: m.round || undefined,
-          type: 'KNOCKOUT',
-          isBronzeMatch: m.stage === 'bronze',
-          entryId1: m.entry_a_id,
-          entryId2: m.entry_b_id,
-          score1: m.score_a,
-          score2: m.score_b,
-          status: m.status === 'completed' ? 'selesai' : (m.status === 'walkover' ? 'walkover' : 'belum_dimainkan'),
-          winnerId: m.winner_entry_id,
-          loserId: m.loser_entry_id,
-          matchNum: m.match_no
-        }));
+        const sortedKoMatches: Match[] = koMatches.map((m: any) => {
+          let nextMatchNum: number | undefined = undefined;
+          if (m.next_match_id) {
+            const parts = String(m.next_match_id).split('-');
+            const lastNum = parseInt(parts[parts.length - 1], 10);
+            if (!isNaN(lastNum)) nextMatchNum = lastNum;
+          }
+
+          return {
+            id: m.id,
+            divisionId: m.division_id,
+            roundName: m.round || undefined,
+            type: 'KNOCKOUT',
+            isBronzeMatch: m.stage === 'bronze',
+            entryId1: m.entry_a_id,
+            entryId2: m.entry_b_id,
+            score1: m.score_a,
+            score2: m.score_b,
+            status: m.status === 'completed' ? 'selesai' : (m.status === 'walkover' ? 'walkover' : 'belum_dimainkan'),
+            winnerId: m.winner_entry_id,
+            loserId: m.loser_entry_id,
+            matchNum: m.match_no,
+            nextMatchNum,
+            notes: m.notes || undefined
+          };
+        });
 
         // Validate cloud wildcard_manual_rankings & cluster
         let validatedWildcardManualRankings: Record<string, number> | undefined = undefined;
@@ -716,7 +727,9 @@ export async function loadTournamentFromSupabase(tournamentId: string): Promise<
           playersQualifyingPerGroup: div.qualifiers_per_group,
           bracketSize: div.knockout_size as any,
           wildcardActive: div.wildcard_enabled,
-          byeActive: div.bye_enabled
+          byeActive: div.bye_enabled,
+          thirdPlaceEnabled: div.third_place_mode ? div.third_place_mode !== 'none' : (div.third_place_enabled !== false),
+          thirdPlaceMode: (div.third_place_mode as any) || (div.third_place_enabled === false ? 'none' : 'playoff')
         },
         entries: divEntries,
         groups: divGroups,
