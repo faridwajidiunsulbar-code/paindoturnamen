@@ -358,10 +358,10 @@ export default function DivisionKnockout({ division, onUpdateDivision, isAdmin =
   const thirdPlaceMode: ThirdPlaceMode = settings.thirdPlaceMode || (settings.thirdPlaceEnabled === false ? 'none' : 'playoff');
 
   const handleThirdPlaceModeChange = (newMode: ThirdPlaceMode) => {
-    if (hasCompletedMatches || knockoutStage?.arrangementLocked) {
+    if (hasCompletedMatches) {
       setShowAlert({
         title: 'Perubahan Mode Diblokir 🛑',
-        message: 'Kebijakan peringkat ketiga tidak dapat diubah setelah susunan dikunci atau pertandingan knockout telah dimainkan.'
+        message: 'Kebijakan peringkat ketiga tidak dapat diubah setelah pertandingan knockout telah dimainkan.'
       });
       return;
     }
@@ -985,13 +985,13 @@ export default function DivisionKnockout({ division, onUpdateDivision, isAdmin =
               {/* Shared Bronze option */}
               <button
                 type="button"
-                disabled={hasCompletedMatches || knockoutStage?.arrangementLocked}
+                disabled={hasCompletedMatches}
                 onClick={() => handleThirdPlaceModeChange('shared_bronze')}
                 className={`p-3 rounded-xl border text-left transition relative flex flex-col justify-between ${
                   thirdPlaceMode === 'shared_bronze'
                     ? 'border-amber-500 bg-amber-50/60 ring-2 ring-amber-500/20'
                     : 'border-slate-200 bg-white hover:border-slate-300'
-                } ${(hasCompletedMatches || knockoutStage?.arrangementLocked) ? 'opacity-60 cursor-not-allowed' : ''}`}
+                } ${hasCompletedMatches ? 'opacity-60 cursor-not-allowed' : ''}`}
               >
                 <div>
                   <div className="flex items-center justify-between mb-1">
@@ -1011,13 +1011,13 @@ export default function DivisionKnockout({ division, onUpdateDivision, isAdmin =
               {/* Playoff option */}
               <button
                 type="button"
-                disabled={hasCompletedMatches || knockoutStage?.arrangementLocked}
+                disabled={hasCompletedMatches}
                 onClick={() => handleThirdPlaceModeChange('playoff')}
                 className={`p-3 rounded-xl border text-left transition relative flex flex-col justify-between ${
                   thirdPlaceMode === 'playoff'
                     ? 'border-amber-500 bg-amber-50/60 ring-2 ring-amber-500/20'
                     : 'border-slate-200 bg-white hover:border-slate-300'
-                } ${(hasCompletedMatches || knockoutStage?.arrangementLocked) ? 'opacity-60 cursor-not-allowed' : ''}`}
+                } ${hasCompletedMatches ? 'opacity-60 cursor-not-allowed' : ''}`}
               >
                 <div>
                   <div className="flex items-center justify-between mb-1">
@@ -1037,13 +1037,13 @@ export default function DivisionKnockout({ division, onUpdateDivision, isAdmin =
               {/* None option */}
               <button
                 type="button"
-                disabled={hasCompletedMatches || knockoutStage?.arrangementLocked}
+                disabled={hasCompletedMatches}
                 onClick={() => handleThirdPlaceModeChange('none')}
                 className={`p-3 rounded-xl border text-left transition relative flex flex-col justify-between ${
                   thirdPlaceMode === 'none'
                     ? 'border-amber-500 bg-amber-50/60 ring-2 ring-amber-500/20'
                     : 'border-slate-200 bg-white hover:border-slate-300'
-                } ${(hasCompletedMatches || knockoutStage?.arrangementLocked) ? 'opacity-60 cursor-not-allowed' : ''}`}
+                } ${hasCompletedMatches ? 'opacity-60 cursor-not-allowed' : ''}`}
               >
                 <div>
                   <div className="flex items-center justify-between mb-1">
