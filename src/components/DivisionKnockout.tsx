@@ -27,9 +27,10 @@ interface DivisionKnockoutProps {
   division: Division;
   onUpdateDivision: (updated: Division) => void;
   isAdmin?: boolean;
+  isReadOnly?: boolean;
 }
 
-export default function DivisionKnockout({ division, onUpdateDivision, isAdmin = true }: DivisionKnockoutProps) {
+export default function DivisionKnockout({ division, onUpdateDivision, isAdmin = true, isReadOnly = false }: DivisionKnockoutProps) {
   const { entries, groups, roundRobinMatches, settings, knockoutStage, champions } = division;
 
   // PAINDO-010 Endorsement & Revocation states
@@ -112,6 +113,10 @@ export default function DivisionKnockout({ division, onUpdateDivision, isAdmin =
     errors: string[];
     warnings: string[];
   } | null>(null);
+
+  // Fix final match loser modal
+  const [showFixFinalModal, setShowFixFinalModal] = useState<boolean>(false);
+  const [fixFinalReason, setFixFinalReason] = useState<string>('');
 
   // 1. COMPUTE PAINDO-008 STANDINGS, QUALIFIERS, WILDCARDS, & SEEDING
   const standingsByGroup: Record<string, GroupStandingRow[]> = {};
@@ -967,13 +972,207 @@ export default function DivisionKnockout({ division, onUpdateDivision, isAdmin =
     setShowIntegrityReport(report);
   };
 
-  const getEntryLabel = (id: string | null) => {
-    if (!id) return 'TBD';
-    if (id === 'BYE') return 'BYE (Lolos Langsung)';
-    const ent = entries.find(e => e.id === id);
-    if (!ent) return 'BYE';
-    return `${ent.name1}${ent.name2 ? ` / ${ent.name2}` : ''}`;
+  const executeFixFinalMatchData = () => {
+    if (!fixFinalReason || fixFinalReason.trim().length < 5) {
+      setShowAlert({
+        title: 'Alasan Koreksi Wajib ⚠️',
+        message: 'Alasan koreksi data hasil Final wajib diisi minimal 5 karakter.'
+      });
+      return;
+    }
+
+    if (!knockoutStage) return;
+
+    const finalMatch = knockoutStage.matches.find(
+      m => m.roundName === 'Final' || (!m.nextMatchNum && !m.isBronzeMatch && m.roundName !== 'Perebutan Juara 3')
+    );
+
+    if (!finalMatch || !finalMatch.winnerId || !finalMatch.entryId1 || !finalMatch.entryId2) {
+      setShowAlert({
+        title: 'Gagal Memperbaiki 🛑',
+        message: 'Pertandingan Final belum memiliki data pemenang dan peserta yang valid.'
+      });
+      return;
+    }
+
+    const candidateLoserId = finalMatch.winnerId === finalMatch.entryId1 ? finalMatch.entryId2 : finalMatch.entryId1;
+
+    const updatedMatches = knockoutStage.matches.map(m => {
+      if (m.id === finalMatch.id) {
+        return {
+          ...m,
+          loserId: candidateLoserId,
+          notes: m.notes
+            ? `${m.notes} | Koreksi loserId: ${fixFinalReason.trim()}`
+            : `Koreksi loserId ke candidate Runner-up: ${fixFinalReason.trim()}`
+        };
+      }
+      return m;
+    });
+
+    onUpdateDivision({
+      ...division,
+      knockoutStage: {
+        ...knockoutStage,
+        matches: updatedMatches
+      }
+    });
+
+    setShowFixFinalModal(false);
+    setFixFinalReason('');
+    setShowAlert({
+      title: 'Perbaikan Berhasil ✅',
+      message: 'Data pihak kalah (loserId) pertandingan Final telah diperbarui ke Runner-up yang sah dan disimpan.'
+    });
   };
+
+    // Helper for canonical knockout match variant
+    const getKnockoutMatchVariant = (match: Match, allMatches?: Match[]): 'final' | 'bronze_playoff' | 'semifinal' | 'standard' => {
+      const rName = (match.roundName || '').trim().toLowerCase();
+      const stage = ((match as any).stage || '').trim().toLowerCase();
+      const round = ((match as any).round || '').trim().toLowerCase();
+
+      // 1. Bronze metadata check
+      if (
+        match.isBronzeMatch ||
+        stage === 'bronze' ||
+        round === 'third_place' ||
+        rName === 'perebutan juara 3' ||
+        rName === 'perebutan tempat ketiga' ||
+        rName.includes('juara 3') ||
+        rName.includes('tempat ketiga')
+      ) {
+        return 'bronze_playoff';
+      }
+
+      // 2. Explicit Final metadata check
+      if (
+        rName === 'final' ||
+        stage === 'final' ||
+        round === 'final'
+      ) {
+        return 'final';
+      }
+
+      // 3. Explicit Semifinal metadata check
+      if (
+        rName === 'semifinal' ||
+        stage === 'semifinal' ||
+        round === 'semifinal'
+      ) {
+        return 'semifinal';
+      }
+
+      // 4. Safe Legacy Fallback for Final ONLY if:
+      // - match is not bronze
+      // - match has no nextMatchNum
+      // - no explicit final exists among all matches
+      if (!match.nextMatchNum) {
+        const matchesList = allMatches || knockoutStage?.matches || [];
+        const hasExplicitFinal = matchesList.some(m => {
+          const mr = (m.roundName || '').trim().toLowerCase();
+          const ms = ((m as any).stage || '').trim().toLowerCase();
+          return mr === 'final' || ms === 'final';
+        });
+
+        if (!hasExplicitFinal) {
+          const isFedBySemifinals = matchesList.filter(m => {
+            const mr = (m.roundName || '').trim().toLowerCase();
+            return (mr === 'semifinal' || (m as any).stage === 'semifinal') && m.nextMatchNum === match.matchNum;
+          }).length === 2;
+
+          const isCanonicalFinalMatchNum = match.matchNum === 3 || match.matchNum === 7 || match.matchNum === 15 || match.matchNum === 31;
+
+          if (isFedBySemifinals || isCanonicalFinalMatchNum) {
+            return 'final';
+          }
+        }
+      }
+
+      return 'standard';
+    };
+
+    // Helper for slot source badge label
+    const getSlotSourceBadge = (entryId: string | null, seedNo?: number): string | null => {
+      if (!activeSlots || activeSlots.length === 0) return null;
+
+      let matchedSlot: KnockoutSlot | undefined;
+      if (seedNo) {
+        matchedSlot = activeSlots.find(s => s.seedNo === seedNo);
+      } else if (entryId && entryId !== 'BYE') {
+        matchedSlot = activeSlots.find(s => s.entryId === entryId);
+      }
+
+      if (!matchedSlot) {
+        if (entryId === 'BYE') return 'BYE';
+        return null;
+      }
+
+      if (matchedSlot.isBye || matchedSlot.entryId === 'BYE') {
+        return 'BYE (Lolos Langsung)';
+      }
+
+      if (matchedSlot.sourceGroupName && matchedSlot.sourceGroupRank) {
+        if (matchedSlot.sourceGroupRank === 1) return `Juara Grup ${matchedSlot.sourceGroupName}`;
+        if (matchedSlot.sourceGroupRank === 2) return `Runner-up Grup ${matchedSlot.sourceGroupName}`;
+        return `Peringkat ${matchedSlot.sourceGroupRank} Grup ${matchedSlot.sourceGroupName}`;
+      }
+
+      if (matchedSlot.isWildcard || matchedSlot.qualificationType === 'wildcard') {
+        return `Wildcard #${matchedSlot.wildcardRank || 1}`;
+      }
+
+      if (matchedSlot.sourceLabel && matchedSlot.sourceLabel !== 'TBD') {
+        return matchedSlot.sourceLabel;
+      }
+
+      return 'Pilihan Manual Admin';
+    };
+
+    // Helper for slot empty state label (never plain TBD when source is known)
+    const getSlotEmptyLabel = (match: Match, slotNum: 1 | 2): string => {
+      if (!knockoutStage || !knockoutStage.matches) {
+        return match.roundName === 'Final'
+          ? (slotNum === 1 ? 'Pemenang Semifinal 1' : 'Pemenang Semifinal 2')
+          : 'TBD';
+      }
+
+      const feedingMatch = knockoutStage.matches.find(m => {
+        if (m.isBronzeMatch) return false;
+        if (m.nextMatchNum === match.matchNum) {
+          if (slotNum === 1) return m.nextMatchSlot === 'player1' || m.matchNum % 2 !== 0;
+          if (slotNum === 2) return m.nextMatchSlot === 'player2' || m.matchNum % 2 === 0;
+        }
+        return false;
+      });
+
+      if (feedingMatch) {
+        if ((feedingMatch.status === 'selesai' || feedingMatch.status === 'walkover') && feedingMatch.winnerId) {
+          return getEntryLabel(feedingMatch.winnerId);
+        }
+        const rName = feedingMatch.roundName || 'Match';
+        return `Pemenang ${rName} #${feedingMatch.matchNum}`;
+      }
+
+      const variant = getKnockoutMatchVariant(match);
+      if (variant === 'final') {
+        return slotNum === 1 ? 'Pemenang Semifinal 1' : 'Pemenang Semifinal 2';
+      }
+
+      if (variant === 'semifinal') {
+        return slotNum === 1 ? 'Pemenang Perempat Final 1' : 'Pemenang Perempat Final 2';
+      }
+
+      return 'TBD';
+    };
+
+    const getEntryLabel = (id: string | null) => {
+      if (!id) return 'TBD';
+      if (id === 'BYE') return 'BYE (Lolos Langsung)';
+      const ent = entries.find(e => e.id === id);
+      if (!ent) return 'BYE';
+      return `${ent.name1}${ent.name2 ? ` / ${ent.name2}` : ''}`;
+    };
 
   const getMatchesByRound = (): Record<string, Match[]> => {
     if (!knockoutStage) return {};
@@ -1467,194 +1666,373 @@ export default function DivisionKnockout({ division, onUpdateDivision, isAdmin =
             })}
           </div>
 
+          {/* Bracket Arrangement Active Summary Bar */}
+          <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl space-y-3" id="bracket-active-summary-bar">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 pb-3 border-b border-slate-200">
+              <div className="flex items-center gap-2">
+                <Settings className="h-4 w-4 text-navy shrink-0" />
+                <span className="text-xs font-black text-navy uppercase tracking-wider">
+                  Ringkasan Susunan Bracket Aktif
+                </span>
+              </div>
+              <div className="flex flex-wrap items-center gap-2 text-[11px] font-extrabold">
+                <span className="px-2.5 py-1 bg-navy/10 text-navy border border-navy/20 rounded-lg flex items-center gap-1">
+                  Mode: <strong className="font-black">{bracketMode === 'automatic' ? 'Otomatis' : bracketMode === 'group_cross' ? 'Silang Grup' : 'Manual Admin'}</strong>
+                </span>
+                <span className="px-2.5 py-1 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-lg">
+                  Template: <strong>Tersimpan</strong>
+                </span>
+                <span className="px-2.5 py-1 bg-sky-50 text-sky-800 border border-sky-200 rounded-lg">
+                  Peserta: <strong>{isGroupPhaseComplete ? 'Sudah Terisi' : 'Proyeksi'}</strong>
+                </span>
+                <span className={`px-2.5 py-1 rounded-lg border ${
+                  knockoutStage.isLocked
+                    ? 'bg-purple-50 text-purple-800 border-purple-200'
+                    : 'bg-amber-50 text-amber-800 border-amber-200'
+                }`}>
+                  Bracket: <strong>{knockoutStage.isLocked ? 'Terkunci' : 'Draft'}</strong>
+                </span>
+              </div>
+            </div>
+
+            {/* Group Cross Pairings Summary if active */}
+            {bracketMode === 'group_cross' && (
+              <div className="p-3 bg-white border border-slate-200 rounded-xl space-y-2" id="group-cross-active-summary">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5 text-xs font-black text-navy uppercase tracking-wider">
+                    <Layers className="h-3.5 w-3.5 text-amber-600" />
+                    PENGATURAN SILANG GRUP
+                  </div>
+                  {isAdmin && !hasCompletedMatches && !knockoutStage?.arrangementLocked && (
+                    <a
+                      href="#bracket-arrangement-manager"
+                      className="text-[10px] font-extrabold text-navy hover:text-navy-light underline"
+                    >
+                      Ubah Pasangan Grup
+                    </a>
+                  )}
+                </div>
+
+                {groupCrossPairings.length === 0 ? (
+                  <p className="text-xs text-amber-800 italic">Belum ada pasangan silang grup yang dikonfigurasi.</p>
+                ) : (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    {groupCrossPairings.map((pair, pIdx) => {
+                      const g1 = groups.find(g => g.id === pair.groupOneId);
+                      const g2 = groups.find(g => g.id === pair.groupTwoId);
+                      const g1Name = g1 ? g1.name : 'Grup ?';
+                      const g2Name = g2 ? g2.name : 'Grup ?';
+
+                      return (
+                        <div key={pair.id || pIdx} className="p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold space-y-1">
+                          <div className="flex items-center justify-between text-navy font-black border-b border-slate-200 pb-1">
+                            <span>{g1Name}</span>
+                            <span className="text-[10px] text-amber-700 bg-amber-100 px-1.5 py-0.2 rounded font-mono">⚔️ SILANG</span>
+                            <span>{g2Name}</span>
+                          </div>
+                          <div className="text-[10px] text-slate-600 space-y-0.5 font-mono">
+                            <div>• Juara {g1Name} vs Runner-up {g2Name}</div>
+                            <div>• Juara {g2Name} vs Runner-up {g1Name}</div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
           {/* Bracket Tree Matches */}
           <div className="overflow-x-auto pt-4" id="bracket-matches-tree">
-            <div className="flex items-start gap-8 min-w-max pb-4">
-              {orderedRoundNames().map((roundName) => {
+            <div className="flex items-start gap-8 sm:gap-12 min-w-max pb-4 relative">
+              {orderedRoundNames().map((roundName, rIdx) => {
                 const roundMatches = getMatchesByRound()[roundName] || [];
+                const isFinalRound = roundName === 'Final';
+
+                // Helper to render an individual match card
+                const renderMatchCard = (m: Match) => {
+                  const isFinished = m.status === 'selesai' || m.status === 'walkover';
+                  const isWO = m.status === 'walkover';
+                  const variant = getKnockoutMatchVariant(m);
+                  const isFinal = variant === 'final';
+
+                  const slot1Source = m.entryId1 ? getSlotSourceBadge(m.entryId1) : getSlotEmptyLabel(m, 1);
+                  const slot2Source = m.entryId2 ? getSlotSourceBadge(m.entryId2) : getSlotEmptyLabel(m, 2);
+
+                  if (isFinal) {
+                    // FINAL CARD VARIANT - DOMINANT CENTERPIECE (PAINDO-009A & HOTFIX border-[3px])
+                    return (
+                      <div
+                        key={m.id}
+                        className="bg-gradient-to-br from-amber-500/20 via-amber-400/10 to-amber-600/25 border-[3px] border-amber-400 rounded-2xl p-5 sm:p-6 shadow-2xl relative overflow-hidden space-y-4 transition min-w-[320px] sm:min-w-[380px]"
+                      >
+                        {/* Glowing Aksen Gold */}
+                        <div className="absolute top-0 right-0 w-32 h-32 bg-amber-300/20 rounded-full blur-xl pointer-events-none" />
+
+                        <div className="flex items-center justify-between pb-3 border-b-2 border-amber-300/80 relative z-10">
+                          <div className="flex items-center gap-2">
+                            <Trophy className="h-6 w-6 text-amber-600 animate-pulse shrink-0" />
+                            <div>
+                              <span className="font-black text-sm sm:text-base text-amber-950 uppercase tracking-wider block">FINAL</span>
+                              <span className="text-[10px] font-extrabold text-amber-900/90 uppercase tracking-widest block">Perebutan Gelar Juara Utama</span>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-xs font-mono font-black text-amber-900/80">#{m.matchNum}</span>
+                            <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider ${
+                              isWO ? 'bg-amber-600 text-white' :
+                              isFinished ? 'bg-emerald-600 text-white' :
+                              'bg-amber-200 text-amber-950 border border-amber-300'
+                            }`}>
+                              {isWO ? 'WO' : isFinished ? 'SELESAI' : 'BELUM DIMAINKAN'}
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="space-y-3 relative z-10">
+                          {/* Player 1 Slot */}
+                          <div className={`p-3 rounded-xl border-2 flex items-center justify-between transition ${
+                            m.winnerId === m.entryId1 && m.entryId1
+                              ? 'bg-amber-100 border-amber-400 text-amber-950 font-black shadow-md'
+                              : 'bg-white/95 border-amber-200 text-slate-800 font-extrabold'
+                          }`}>
+                            <div className="flex flex-col truncate pr-2">
+                              <div className="flex items-center gap-1.5 truncate">
+                                <span className="truncate text-sm sm:text-base font-extrabold">{m.entryId1 ? getEntryLabel(m.entryId1) : getSlotEmptyLabel(m, 1)}</span>
+                                {m.winnerId === m.entryId1 && m.entryId1 && (
+                                  <span className="shrink-0 bg-amber-400 text-amber-950 font-black text-[10px] px-2 py-0.5 rounded flex items-center gap-0.5 shadow-xs">
+                                    <Trophy className="h-3 w-3" /> JUARA
+                                  </span>
+                                )}
+                                {isFinished && m.winnerId && m.winnerId !== m.entryId1 && m.entryId1 && (
+                                  <span className="shrink-0 bg-slate-200 text-slate-700 font-bold text-[10px] px-2 py-0.5 rounded">
+                                    RUNNER-UP
+                                  </span>
+                                )}
+                              </div>
+                              <span className="text-[10px] font-mono text-amber-800/80 font-bold mt-0.5">
+                                {slot1Source}
+                              </span>
+                            </div>
+                            <span className="font-mono text-base sm:text-lg font-black px-3 py-1 bg-amber-200/80 rounded-lg text-amber-950 shrink-0">
+                              {m.score1 ?? '-'}
+                            </span>
+                          </div>
+
+                          {/* Player 2 Slot */}
+                          <div className={`p-3 rounded-xl border-2 flex items-center justify-between transition ${
+                            m.winnerId === m.entryId2 && m.entryId2
+                              ? 'bg-amber-100 border-amber-400 text-amber-950 font-black shadow-md'
+                              : 'bg-white/95 border-amber-200 text-slate-800 font-extrabold'
+                          }`}>
+                            <div className="flex flex-col truncate pr-2">
+                              <div className="flex items-center gap-1.5 truncate">
+                                <span className="truncate text-sm sm:text-base font-extrabold">{m.entryId2 ? getEntryLabel(m.entryId2) : getSlotEmptyLabel(m, 2)}</span>
+                                {m.winnerId === m.entryId2 && m.entryId2 && (
+                                  <span className="shrink-0 bg-amber-400 text-amber-950 font-black text-[10px] px-2 py-0.5 rounded flex items-center gap-0.5 shadow-xs">
+                                    <Trophy className="h-3 w-3" /> JUARA
+                                  </span>
+                                )}
+                                {isFinished && m.winnerId && m.winnerId !== m.entryId2 && m.entryId2 && (
+                                  <span className="shrink-0 bg-slate-200 text-slate-700 font-bold text-[10px] px-2 py-0.5 rounded">
+                                    RUNNER-UP
+                                  </span>
+                                )}
+                              </div>
+                              <span className="text-[10px] font-mono text-amber-800/80 font-bold mt-0.5">
+                                {slot2Source}
+                              </span>
+                            </div>
+                            <span className="font-mono text-base sm:text-lg font-black px-3 py-1 bg-amber-200/80 rounded-lg text-amber-950 shrink-0">
+                              {m.score2 ?? '-'}
+                            </span>
+                          </div>
+                        </div>
+
+                        {m.notes && (
+                          <div className="text-[10px] italic text-amber-900/90 bg-amber-100/80 p-2 rounded-lg font-mono truncate border border-amber-200 relative z-10">
+                            💬 {m.notes}
+                          </div>
+                        )}
+
+                        {isAdmin && knockoutStage?.arrangementLocked && (
+                          <div className="flex items-center gap-2 pt-1 relative z-10">
+                            {m.entryId1 && m.entryId2 && m.entryId1 !== 'BYE' && m.entryId2 !== 'BYE' && (
+                              <button
+                                type="button"
+                                onClick={() => openKoScoreModal(m)}
+                                className="flex-1 py-2 bg-amber-500 hover:bg-amber-600 text-amber-950 font-black rounded-xl text-xs transition flex items-center justify-center gap-1 shadow-md cursor-pointer"
+                              >
+                                <Edit3 className="h-4 w-4" /> {isFinished ? 'Edit Skor Final' : 'Input Skor Final'}
+                              </button>
+                            )}
+                            {isFinished && (
+                              <button
+                                type="button"
+                                onClick={() => handleResetKoScore(m)}
+                                title="Reset hasil final"
+                                className="px-3 py-2 bg-rose-50 border border-rose-200 text-rose-700 hover:bg-rose-100 rounded-xl text-xs font-bold transition flex items-center gap-1 cursor-pointer"
+                              >
+                                <RotateCcw className="h-4 w-4" /> Reset
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  }
+
+                  // STANDARD MATCH CARD
+                  return (
+                    <div
+                      key={m.id}
+                      className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 space-y-2 card-shadow hover:border-slate-300 transition relative flex-1"
+                    >
+                      <div className="flex items-center justify-between text-[10px] font-mono font-bold text-slate-500">
+                        <span className="font-extrabold text-navy">Match #{m.matchNum}</span>
+                        <span className={`px-1.5 py-0.5 rounded font-extrabold ${
+                          isWO ? 'bg-amber-100 text-amber-800' :
+                          m.status === 'selesai' ? 'bg-emerald-100 text-emerald-800' :
+                          'bg-slate-200 text-slate-600'
+                        }`}>
+                          {isWO ? 'WO' : m.status === 'selesai' ? 'SELESAI' : 'BELUM'}
+                        </span>
+                      </div>
+
+                      <div className="space-y-2 text-xs font-bold">
+                        {/* Player 1 */}
+                        <div className={`p-2 rounded-lg border flex items-center justify-between transition ${
+                          m.winnerId === m.entryId1 && m.entryId1 ? 'bg-emerald-100/90 border-emerald-300 text-emerald-950 font-black' : 'bg-white border-slate-200 text-slate-700'
+                        }`}>
+                          <div className="flex flex-col truncate pr-2">
+                            <span className="truncate">{m.entryId1 ? getEntryLabel(m.entryId1) : getSlotEmptyLabel(m, 1)}</span>
+                            <span className="text-[9px] font-mono text-slate-400 font-semibold">
+                              {slot1Source}
+                            </span>
+                          </div>
+                          <span className="font-mono text-xs font-black shrink-0 px-1.5 py-0.5 bg-slate-100 rounded">{m.score1 ?? '-'}</span>
+                        </div>
+
+                        {/* Player 2 */}
+                        <div className={`p-2 rounded-lg border flex items-center justify-between transition ${
+                          m.winnerId === m.entryId2 && m.entryId2 ? 'bg-emerald-100/90 border-emerald-300 text-emerald-950 font-black' : 'bg-white border-slate-200 text-slate-700'
+                        }`}>
+                          <div className="flex flex-col truncate pr-2">
+                            <span className="truncate">{m.entryId2 ? getEntryLabel(m.entryId2) : getSlotEmptyLabel(m, 2)}</span>
+                            <span className="text-[9px] font-mono text-slate-400 font-semibold">
+                              {slot2Source}
+                            </span>
+                          </div>
+                          <span className="font-mono text-xs font-black shrink-0 px-1.5 py-0.5 bg-slate-100 rounded">{m.score2 ?? '-'}</span>
+                        </div>
+                      </div>
+
+                      {m.notes && (
+                        <div className="text-[10px] italic text-slate-500 bg-slate-100 p-1 rounded font-mono truncate">
+                          💬 {m.notes}
+                        </div>
+                      )}
+
+                      {isAdmin && knockoutStage?.arrangementLocked && (
+                        <div className="flex items-center gap-1.5 pt-1">
+                          {m.entryId1 && m.entryId2 && m.entryId1 !== 'BYE' && m.entryId2 !== 'BYE' && (
+                            <button
+                              type="button"
+                              onClick={() => openKoScoreModal(m)}
+                              className="flex-1 py-1 bg-navy text-neon rounded-lg text-[10px] font-extrabold hover:bg-navy-light transition flex items-center justify-center gap-1 cursor-pointer"
+                            >
+                              <Edit3 className="h-3 w-3" /> {isFinished ? 'Edit Skor' : 'Input Skor'}
+                            </button>
+                          )}
+
+                          {isFinished && (
+                            <button
+                              type="button"
+                              onClick={() => handleResetKoScore(m)}
+                              title="Reset hasil pertandingan ini"
+                              className="px-2 py-1 bg-rose-50 border border-rose-200 text-rose-700 hover:bg-rose-100 rounded-lg text-[10px] font-extrabold transition flex items-center gap-1 cursor-pointer"
+                            >
+                              <RotateCcw className="h-3 w-3" /> Reset
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                };
+
+                // Group round matches into canonical feeder pairs based on nextMatchNum
+                const matchGroups: { nextMatchNum: number | null; matches: Match[] }[] = [];
+                const processedIds = new Set<string>();
+
+                roundMatches.forEach(m => {
+                  if (processedIds.has(m.id)) return;
+                  if (m.nextMatchNum) {
+                    const siblings = roundMatches.filter(s => s.nextMatchNum === m.nextMatchNum);
+                    siblings.forEach(s => processedIds.add(s.id));
+                    matchGroups.push({ nextMatchNum: m.nextMatchNum, matches: siblings });
+                  } else {
+                    processedIds.add(m.id);
+                    matchGroups.push({ nextMatchNum: null, matches: [m] });
+                  }
+                });
+
                 return (
-                  <div key={roundName} className="flex-1 space-y-4 min-w-[240px]">
-                    <div className="text-center font-extrabold text-xs text-navy uppercase tracking-wider pb-2 border-b border-slate-150 flex items-center justify-center gap-1.5">
+                  <div
+                    key={roundName}
+                    className={`flex-1 space-y-4 ${
+                      isFinalRound ? 'min-w-[320px] sm:min-w-[380px]' : 'min-w-[280px]'
+                    }`}
+                  >
+                    <div className="text-center font-black text-xs text-navy uppercase tracking-wider pb-2 border-b-2 border-navy/20 flex items-center justify-center gap-1.5">
+                      {isFinalRound && <Trophy className="h-4 w-4 text-amber-600" />}
                       <span>{roundName}</span>
                     </div>
 
                     <div className="space-y-6">
-                      {roundMatches.map(m => {
-                        const isFinished = m.status === 'selesai' || m.status === 'walkover';
-                        const isWO = m.status === 'walkover';
-                        const isFinal = m.roundName === 'Final';
+                      {matchGroups.map((group, gIdx) => {
+                        if (group.matches.length === 2) {
+                          const matchA = group.matches.find(s => s.nextMatchSlot === 'player1') || group.matches[0];
+                          const matchB = group.matches.find(s => s.nextMatchSlot === 'player2') || group.matches[1];
 
-                        if (isFinal) {
-                          // FINAL CARD VARIANT (PAINDO-009A)
                           return (
-                            <div
-                              key={m.id}
-                              className="bg-gradient-to-br from-amber-500/10 via-amber-400/5 to-amber-600/15 border-2 border-amber-400 rounded-2xl p-4 sm:p-5 shadow-xl relative overflow-hidden space-y-3 min-w-[280px] sm:min-w-[320px] transition"
-                            >
-                              <div className="flex items-center justify-between pb-2 border-b border-amber-200/80">
-                                <div className="flex items-center gap-1.5">
-                                  <Trophy className="h-5 w-5 text-amber-600 animate-pulse" />
-                                  <div>
-                                    <span className="font-black text-xs sm:text-sm text-amber-950 uppercase tracking-wider block">FINAL</span>
-                                    <span className="text-[10px] font-bold text-amber-800/80 uppercase tracking-widest block">Perebutan Gelar Juara</span>
-                                  </div>
-                                </div>
-                                <div className="flex items-center gap-1.5">
-                                  <span className="text-[10px] font-mono font-bold text-amber-800/70">#{m.matchNum}</span>
-                                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider ${
-                                    isWO ? 'bg-amber-600 text-white' :
-                                    isFinished ? 'bg-emerald-600 text-white' :
-                                    'bg-amber-200/80 text-amber-900'
-                                  }`}>
-                                    {isWO ? 'WO' : isFinished ? 'SELESAI' : 'BELUM'}
-                                  </span>
-                                </div>
+                            <div key={`pair-${group.nextMatchNum || gIdx}`} className="flex items-stretch relative my-3">
+                              {/* Left: Feeder Match Cards Stacked */}
+                              <div className="flex flex-col justify-between gap-6 flex-1 min-w-[240px]">
+                                {renderMatchCard(matchA)}
+                                {renderMatchCard(matchB)}
                               </div>
 
-                              <div className="space-y-2">
-                                {/* Player 1 */}
-                                <div className={`p-2.5 rounded-xl border flex items-center justify-between transition ${
-                                  m.winnerId === m.entryId1 && m.entryId1
-                                    ? 'bg-amber-100/90 border-amber-300 text-amber-950 font-black shadow-xs'
-                                    : 'bg-white/90 border-amber-200/60 text-slate-800 font-bold'
-                                }`}>
-                                  <div className="flex items-center gap-1.5 truncate pr-2">
-                                    <span className="truncate text-xs sm:text-sm">{getEntryLabel(m.entryId1)}</span>
-                                    {m.winnerId === m.entryId1 && m.entryId1 && (
-                                      <span className="shrink-0 bg-amber-400 text-amber-950 font-black text-[9px] px-1.5 py-0.5 rounded flex items-center gap-0.5 shadow-2xs">
-                                        <Trophy className="h-2.5 w-2.5" /> JUARA
-                                      </span>
-                                    )}
-                                    {isFinished && m.winnerId && m.winnerId !== m.entryId1 && m.entryId1 && (
-                                      <span className="shrink-0 bg-slate-200 text-slate-700 font-bold text-[9px] px-1.5 py-0.5 rounded">
-                                        RUNNER-UP
-                                      </span>
-                                    )}
-                                  </div>
-                                  <span className="font-mono text-xs sm:text-sm font-black px-2 py-0.5 bg-amber-200/50 rounded-md text-amber-950">
-                                    {m.score1 ?? '-'}
-                                  </span>
-                                </div>
-
-                                {/* Player 2 */}
-                                <div className={`p-2.5 rounded-xl border flex items-center justify-between transition ${
-                                  m.winnerId === m.entryId2 && m.entryId2
-                                    ? 'bg-amber-100/90 border-amber-300 text-amber-950 font-black shadow-xs'
-                                    : 'bg-white/90 border-amber-200/60 text-slate-800 font-bold'
-                                }`}>
-                                  <div className="flex items-center gap-1.5 truncate pr-2">
-                                    <span className="truncate text-xs sm:text-sm">{getEntryLabel(m.entryId2)}</span>
-                                    {m.winnerId === m.entryId2 && m.entryId2 && (
-                                      <span className="shrink-0 bg-amber-400 text-amber-950 font-black text-[9px] px-1.5 py-0.5 rounded flex items-center gap-0.5 shadow-2xs">
-                                        <Trophy className="h-2.5 w-2.5" /> JUARA
-                                      </span>
-                                    )}
-                                    {isFinished && m.winnerId && m.winnerId !== m.entryId2 && m.entryId2 && (
-                                      <span className="shrink-0 bg-slate-200 text-slate-700 font-bold text-[9px] px-1.5 py-0.5 rounded">
-                                        RUNNER-UP
-                                      </span>
-                                    )}
-                                  </div>
-                                  <span className="font-mono text-xs sm:text-sm font-black px-2 py-0.5 bg-amber-200/50 rounded-md text-amber-950">
-                                    {m.score2 ?? '-'}
-                                  </span>
+                              {/* Right: Canonical Connector Branch (Horizontal / Vertical) */}
+                              <div className="hidden md:flex w-8 sm:w-10 relative items-center justify-center shrink-0 pointer-events-none ml-2">
+                                {/* Top horizontal line from Match A */}
+                                <div className="absolute top-[25%] left-0 right-1/2 h-[2px] bg-slate-300" />
+                                {/* Bottom horizontal line from Match B */}
+                                <div className="absolute top-[75%] left-0 right-1/2 h-[2px] bg-slate-300" />
+                                {/* Vertical joining line */}
+                                <div className="absolute top-[25%] bottom-[25%] right-1/2 w-[2px] bg-slate-300" />
+                                {/* Center horizontal line pointing right to next match */}
+                                <div className="absolute top-1/2 left-1/2 right-0 h-[2px] bg-slate-300 flex items-center justify-end">
+                                  <ChevronRight className="h-3.5 w-3.5 text-slate-400 -mr-2 shrink-0" />
                                 </div>
                               </div>
-
-                              {m.notes && (
-                                <div className="text-[10px] italic text-amber-900/80 bg-amber-100/50 p-1.5 rounded-lg font-mono truncate">
-                                  💬 {m.notes}
-                                </div>
-                              )}
-
-                              {isAdmin && knockoutStage?.arrangementLocked && (
-                                <div className="flex items-center gap-1.5 pt-1">
-                                  {m.entryId1 && m.entryId2 && m.entryId1 !== 'BYE' && m.entryId2 !== 'BYE' && (
-                                    <button
-                                      type="button"
-                                      onClick={() => openKoScoreModal(m)}
-                                      className="flex-1 py-1.5 bg-amber-500 hover:bg-amber-600 text-amber-950 font-black rounded-lg text-xs transition flex items-center justify-center gap-1 shadow-xs"
-                                    >
-                                      <Edit3 className="h-3.5 w-3.5" /> {isFinished ? 'Edit Skor Final' : 'Input Skor Final'}
-                                    </button>
-                                  )}
-                                  {isFinished && (
-                                    <button
-                                      type="button"
-                                      onClick={() => handleResetKoScore(m)}
-                                      title="Reset hasil final"
-                                      className="px-2.5 py-1.5 bg-rose-50 border border-rose-200 text-rose-700 hover:bg-rose-100 rounded-lg text-xs font-bold transition flex items-center gap-1"
-                                    >
-                                      <RotateCcw className="h-3.5 w-3.5" /> Reset
-                                    </button>
-                                  )}
-                                </div>
-                              )}
                             </div>
                           );
                         }
 
-                        // STANDARD MATCH CARD VARIANT
+                        // Single match in group (e.g. Final or orphan/standalone)
+                        const singleMatch = group.matches[0];
                         return (
-                          <div
-                            key={m.id}
-                            className="bg-slate-50 border border-slate-200 rounded-xl p-3 space-y-2 card-shadow hover:border-slate-300 transition"
-                          >
-                            <div className="flex items-center justify-between text-[10px] font-mono font-bold text-slate-400">
-                              <span>Match #{m.matchNum}</span>
-                              <span className={`px-1.5 py-0.5 rounded font-extrabold ${
-                                isWO ? 'bg-amber-100 text-amber-800' :
-                                m.status === 'selesai' ? 'bg-emerald-100 text-emerald-800' :
-                                'bg-slate-200 text-slate-600'
-                              }`}>
-                                {isWO ? 'WO' : m.status === 'selesai' ? 'SELESAI' : 'BELUM'}
-                              </span>
+                          <div key={singleMatch.id} className="flex items-center relative my-3">
+                            <div className="flex-1">
+                              {renderMatchCard(singleMatch)}
                             </div>
-
-                            <div className="space-y-1.5 text-xs font-bold">
-                              <div className={`p-1.5 rounded flex items-center justify-between ${
-                                m.winnerId === m.entryId1 && m.entryId1 ? 'bg-emerald-100 text-emerald-900 font-black' : 'bg-white text-slate-700'
-                              }`}>
-                                <span className="truncate">{getEntryLabel(m.entryId1)}</span>
-                                <span className="font-mono text-xs">{m.score1 ?? '-'}</span>
-                              </div>
-
-                              <div className={`p-1.5 rounded flex items-center justify-between ${
-                                m.winnerId === m.entryId2 && m.entryId2 ? 'bg-emerald-100 text-emerald-900 font-black' : 'bg-white text-slate-700'
-                              }`}>
-                                <span className="truncate">{getEntryLabel(m.entryId2)}</span>
-                                <span className="font-mono text-xs">{m.score2 ?? '-'}</span>
-                              </div>
-                            </div>
-
-                            {m.notes && (
-                              <div className="text-[10px] italic text-slate-500 bg-slate-100 p-1 rounded font-mono truncate">
-                                💬 {m.notes}
-                              </div>
-                            )}
-
-                            {isAdmin && knockoutStage?.arrangementLocked && (
-                              <div className="flex items-center gap-1.5 pt-1">
-                                {m.entryId1 && m.entryId2 && m.entryId1 !== 'BYE' && m.entryId2 !== 'BYE' && (
-                                  <button
-                                    type="button"
-                                    onClick={() => openKoScoreModal(m)}
-                                    className="flex-1 py-1 bg-navy text-neon rounded-lg text-[10px] font-extrabold hover:bg-navy-light transition flex items-center justify-center gap-1"
-                                  >
-                                    <Edit3 className="h-3 w-3" /> {isFinished ? 'Edit Skor' : 'Input Skor'}
-                                  </button>
-                                )}
-
-                                {isFinished && (
-                                  <button
-                                    type="button"
-                                    onClick={() => handleResetKoScore(m)}
-                                    title="Reset hasil pertandingan ini"
-                                    className="px-2 py-1 bg-rose-50 border border-rose-200 text-rose-700 hover:bg-rose-100 rounded-lg text-[10px] font-extrabold transition flex items-center gap-1"
-                                  >
-                                    <RotateCcw className="h-3 w-3" /> Reset
-                                  </button>
-                                )}
+                            {singleMatch.nextMatchNum && !isFinalRound && (
+                              <div className="hidden md:flex w-8 sm:w-10 relative items-center justify-center shrink-0 pointer-events-none ml-2">
+                                <div className="w-full h-[2px] bg-slate-300 flex items-center justify-end">
+                                  <ChevronRight className="h-3.5 w-3.5 text-slate-400 -mr-2 shrink-0" />
+                                </div>
                               </div>
                             )}
                           </div>
@@ -2018,6 +2396,32 @@ export default function DivisionKnockout({ division, onUpdateDivision, isAdmin =
                     {podiumPreview.entries.length} Posisi Canonical
                   </span>
                 </div>
+
+                {podiumPreview.warnings.length > 0 && (
+                  <div className="p-3.5 bg-amber-50 border-2 border-amber-300 rounded-xl space-y-2">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2 text-xs font-black text-amber-900">
+                        <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0" />
+                        Peringatan Integritas Hasil Final
+                      </div>
+                      {isAdmin && !isReadOnly && (
+                        <button
+                          type="button"
+                          onClick={() => setShowFixFinalModal(true)}
+                          className="px-3 py-1 bg-amber-600 hover:bg-amber-700 text-white font-extrabold text-[11px] rounded-lg shadow-xs transition flex items-center gap-1 cursor-pointer"
+                        >
+                          <Edit3 className="h-3 w-3" />
+                          Perbaiki Data Hasil Final
+                        </button>
+                      )}
+                    </div>
+                    <ul className="list-disc list-inside text-xs font-bold text-amber-800 space-y-0.5">
+                      {podiumPreview.warnings.map((warn, i) => (
+                        <li key={i}>{warn}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
 
                 {podiumPreview.entries.length === 0 ? (
                   <div className="p-8 text-center bg-slate-50 rounded-xl border border-dashed border-slate-250 text-slate-500 text-xs font-medium space-y-2">
@@ -2651,6 +3055,65 @@ export default function DivisionKnockout({ division, onUpdateDivision, isAdmin =
                 }`}
               >
                 Batalkan Pengesahan
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Fix Final Match Data Modal */}
+      {showFixFinalModal && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fade-in">
+          <div className="bg-white rounded-2xl max-w-lg w-full p-6 space-y-4 card-shadow border border-slate-150">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-150">
+              <h4 className="font-extrabold text-navy text-sm flex items-center gap-2">
+                <Edit3 className="h-5 w-5 text-amber-600" />
+                Perbaiki Data Hasil Final
+              </h4>
+              <button onClick={() => setShowFixFinalModal(false)} className="text-slate-400 hover:text-slate-600">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="space-y-3 text-xs text-slate-700">
+              <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-amber-950 space-y-1">
+                <div className="font-black">Koreksi Data Loser Final (Hotfix Sync)</div>
+                <p>
+                  Sistem mendeteksi bahwa data pihak kalah (loserId) pertandingan Final tidak konsisten. Aksi ini hanya akan memperbarui <strong className="font-mono">loserId</strong> ke Runner-up sah dari peserta Final tanpa mengubah skor, winnerId, atau susunan bracket.
+                </p>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-extrabold text-navy block">Alasan Koreksi Data Final <span className="text-rose-500">*</span></label>
+                <textarea
+                  value={fixFinalReason}
+                  onChange={e => setFixFinalReason(e.target.value)}
+                  placeholder="Contoh: Koreksi sinkronisasi runner-up sah pertandingan Final sesuai audit canonical"
+                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-navy"
+                  rows={3}
+                />
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2 border-t border-slate-150">
+              <button
+                type="button"
+                onClick={() => setShowFixFinalModal(false)}
+                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={executeFixFinalMatchData}
+                disabled={!fixFinalReason.trim()}
+                className={`px-4 py-2 font-extrabold text-xs rounded-xl card-shadow transition ${
+                  fixFinalReason.trim()
+                    ? 'bg-amber-600 hover:bg-amber-700 text-white cursor-pointer'
+                    : 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                }`}
+              >
+                Simpan & Perbaiki Data Final
               </button>
             </div>
           </div>

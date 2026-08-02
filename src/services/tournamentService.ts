@@ -5,6 +5,7 @@ import { saveEntriesToSupabase, loadEntriesForTournament } from './entryService'
 import { saveGroupsAndMembersToSupabase, loadGroupsForTournament } from './groupService';
 import { saveMatchesToSupabase, loadMatchesForTournament } from './matchService';
 import { saveKnockoutSlotsAndChampionsToSupabase, loadKnockoutSlotsAndChampionsForTournament } from './knockoutService';
+import { isTournamentReadOnly, validateTournamentClosureReadiness, validateTournamentIntegrityForClosure } from '../utils/closureHelpers';
 
 export interface UserProfile {
   id: string;
@@ -57,7 +58,10 @@ export async function getCurrentProfile(): Promise<UserProfile | null> {
  */
 
 // Save/Sync a complete tournament tree to the relational database using domain services
-export async function saveTournamentToSupabase(tournament: Tournament): Promise<ServiceResult<{
+export async function saveTournamentToSupabase(
+  tournament: Tournament,
+  isClosureAction = false
+): Promise<ServiceResult<{
   savedAt: string;
   cloudRevision: number;
   cloudUpdatedAt: string;
@@ -67,6 +71,19 @@ export async function saveTournamentToSupabase(tournament: Tournament): Promise<
     return {
       success: false,
       error: { module: 'tournament', operation: 'insert', message: 'Database Cloud (Supabase) belum terkonfigurasi.' }
+    };
+  }
+
+  // PAINDO-011: Read-only guard for closed tournaments
+  if (!isClosureAction && isTournamentReadOnly(tournament)) {
+    return {
+      success: false,
+      error: {
+        code: 'TOURNAMENT_READ_ONLY',
+        module: 'tournament',
+        operation: 'save',
+        message: 'Turnamen ini telah resmi ditutup dan berstatus Read-Only (Arsip). Perubahan data tidak dapat disimpan.'
+      }
     };
   }
 
@@ -137,16 +154,22 @@ export async function saveTournamentToSupabase(tournament: Tournament): Promise<
 
     let reservedRevision = 1;
 
+    const tourneyStatus = tournament.status || (tournament.isClosed ? 'closed' : 'active');
+
     if (existingCloudTourney) {
       // Existing tournament in Cloud -> Perform Atomic Conditional Update Reservation
-      // CRITICAL: expectedRevision comes strictly from tournament.cloudRevision
-      // DO NOT fallback to cloud revision or overwrite expectedRevision!
-
       const reservePayload: any = {
         name: tournament.name,
         date: tournament.date,
         location: tournament.location || '',
-        status: 'active',
+        status: tourneyStatus,
+        is_closed: tournament.isClosed === true,
+        closed_at: tournament.closedAt || null,
+        closed_by: tournament.closedBy || null,
+        close_reason: tournament.closeReason || null,
+        reopened_at: tournament.reopenedAt || null,
+        reopened_by: tournament.reopenedBy || null,
+        reopen_reason: tournament.reopenReason || null,
         revision: expectedRevision + 1,
         save_status: 'saving'
       };
@@ -230,7 +253,14 @@ export async function saveTournamentToSupabase(tournament: Tournament): Promise<
         name: tournament.name,
         date: tournament.date,
         location: tournament.location || '',
-        status: 'active',
+        status: tourneyStatus,
+        is_closed: tournament.isClosed === true,
+        closed_at: tournament.closedAt || null,
+        closed_by: tournament.closedBy || null,
+        close_reason: tournament.closeReason || null,
+        reopened_at: tournament.reopenedAt || null,
+        reopened_by: tournament.reopenedBy || null,
+        reopen_reason: tournament.reopenReason || null,
         revision: 1,
         save_status: 'saving'
       };
@@ -796,6 +826,14 @@ export async function loadTournamentFromSupabase(tournamentId: string): Promise<
       events,
       ageGroups,
       activeDivisions,
+      status: (tData.status as any) || (tData.is_closed ? 'closed' : 'active'),
+      isClosed: tData.is_closed === true || tData.status === 'closed',
+      closedAt: tData.closed_at || null,
+      closedBy: tData.closed_by || null,
+      closeReason: tData.close_reason || null,
+      reopenedAt: tData.reopened_at || null,
+      reopenedBy: tData.reopened_by || null,
+      reopenReason: tData.reopen_reason || null,
       ownerId: tData.owner_id,
       updatedAt: tData.updated_at,
       cloudUpdatedAt: tData.updated_at,
@@ -1149,4 +1187,137 @@ export async function getLatestTournamentFromSupabase(): Promise<Tournament | nu
     console.error('Error in getLatestTournamentFromSupabase:', err);
     return null;
   }
+}
+
+/**
+ * PAINDO-011: Official Tournament Closure Action
+ */
+export async function closeTournamentOfficial(
+  tournament: Tournament,
+  closeReason: string,
+  adminIdentity?: string
+): Promise<ServiceResult<Tournament>> {
+  if (!closeReason || closeReason.trim().length < 5) {
+    return {
+      success: false,
+      error: {
+        code: 'INVALID_REASON',
+        module: 'tournament',
+        operation: 'close',
+        message: 'Alasan penutupan turnamen wajib diisi minimal 5 karakter.'
+      }
+    };
+  }
+
+  // Validate closure readiness & integrity
+  const readiness = validateTournamentClosureReadiness(tournament);
+  if (!readiness.canClose) {
+    return {
+      success: false,
+      error: {
+        code: 'CLOSURE_VALIDATION_FAILED',
+        module: 'tournament',
+        operation: 'close',
+        message: `Turnamen belum siap ditutup:\n- ${readiness.blockers.join('\n- ')}`
+      }
+    };
+  }
+
+  const integrity = validateTournamentIntegrityForClosure(tournament);
+  if (!integrity.valid) {
+    return {
+      success: false,
+      error: {
+        code: 'INTEGRITY_VALIDATION_FAILED',
+        module: 'tournament',
+        operation: 'close',
+        message: `Integritas data turnamen tidak valid:\n- ${integrity.errors.join('\n- ')}`
+      }
+    };
+  }
+
+  const now = new Date().toISOString();
+  const updatedTournament: Tournament = {
+    ...tournament,
+    isClosed: true,
+    status: 'closed',
+    closedAt: now,
+    closedBy: adminIdentity || 'Admin',
+    closeReason: closeReason.trim()
+  };
+
+  if (!isSupabaseConfigured) {
+    return {
+      success: true,
+      data: updatedTournament
+    };
+  }
+
+  const saveRes = await saveTournamentToSupabase(updatedTournament, true);
+  if (!saveRes.success) {
+    return saveRes as any;
+  }
+
+  return {
+    success: true,
+    data: {
+      ...updatedTournament,
+      cloudRevision: saveRes.data.cloudRevision,
+      cloudUpdatedAt: saveRes.data.cloudUpdatedAt,
+      cloudSaveStatus: 'complete'
+    }
+  };
+}
+
+/**
+ * PAINDO-011: Official Tournament Reopen Action
+ */
+export async function reopenTournamentOfficial(
+  tournament: Tournament,
+  reopenReason: string,
+  adminIdentity?: string
+): Promise<ServiceResult<Tournament>> {
+  if (!reopenReason || reopenReason.trim().length < 5) {
+    return {
+      success: false,
+      error: {
+        code: 'INVALID_REASON',
+        module: 'tournament',
+        operation: 'reopen',
+        message: 'Alasan pembukaan kembali turnamen wajib diisi minimal 5 karakter.'
+      }
+    };
+  }
+
+  const now = new Date().toISOString();
+  const updatedTournament: Tournament = {
+    ...tournament,
+    isClosed: false,
+    status: 'completed',
+    reopenedAt: now,
+    reopenedBy: adminIdentity || 'Admin',
+    reopenReason: reopenReason.trim()
+  };
+
+  if (!isSupabaseConfigured) {
+    return {
+      success: true,
+      data: updatedTournament
+    };
+  }
+
+  const saveRes = await saveTournamentToSupabase(updatedTournament, true);
+  if (!saveRes.success) {
+    return saveRes as any;
+  }
+
+  return {
+    success: true,
+    data: {
+      ...updatedTournament,
+      cloudRevision: saveRes.data.cloudRevision,
+      cloudUpdatedAt: saveRes.data.cloudUpdatedAt,
+      cloudSaveStatus: 'complete'
+    }
+  };
 }

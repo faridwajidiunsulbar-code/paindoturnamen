@@ -44,28 +44,56 @@ export function deriveDivisionPodium(
     errors.push('Pertandingan Final tidak ditemukan.');
   } else if (finalMatch.status !== 'selesai' && finalMatch.status !== 'walkover') {
     errors.push('Pertandingan Final belum selesai.');
-  } else if (!finalMatch.winnerId || !finalMatch.loserId) {
-    errors.push('Pemenang atau tim kalah pertandingan Final belum ditentukan.');
+  } else if (!finalMatch.winnerId) {
+    errors.push('Pemenang pertandingan Final belum ditentukan.');
   } else {
-    // Final Winner -> Placement 1
-    podiumEntries.push({
-      placement: 1,
-      entryId: finalMatch.winnerId,
-      label: 'Juara',
-      sourceType: 'final_winner',
-      sourceMatchId: finalMatch.id,
-      isShared: false
-    });
+    const e1 = finalMatch.entryId1;
+    const e2 = finalMatch.entryId2;
+    const actualWinnerId = finalMatch.winnerId;
+    const actualLoserId = finalMatch.loserId;
 
-    // Final Loser -> Placement 2
-    podiumEntries.push({
-      placement: 2,
-      entryId: finalMatch.loserId,
-      label: 'Runner-up',
-      sourceType: 'final_loser',
-      sourceMatchId: finalMatch.id,
-      isShared: false
-    });
+    if (!e1 || !e2 || e1 === e2) {
+      errors.push('Peserta pertandingan Final tidak valid.');
+    } else if (actualWinnerId !== e1 && actualWinnerId !== e2) {
+      errors.push('Pemenang Final bukan salah satu peserta Final.');
+    } else {
+      // Final Winner -> Placement 1
+      podiumEntries.push({
+        placement: 1,
+        entryId: actualWinnerId,
+        label: 'Juara',
+        sourceType: 'final_winner',
+        sourceMatchId: finalMatch.id,
+        isShared: false
+      });
+
+      // Compute candidate Runner-up as the Final participant besides the winner
+      const expectedCandidateLoserId = actualWinnerId === e1 ? e2 : e1;
+      let effectiveLoserId = actualLoserId;
+
+      if (!actualLoserId || (actualLoserId !== e1 && actualLoserId !== e2) || actualLoserId === actualWinnerId) {
+        effectiveLoserId = expectedCandidateLoserId;
+
+        const candidateEntry = entries.find(e => e.id === expectedCandidateLoserId);
+        const candidateName = candidateEntry
+          ? `${candidateEntry.name1}${candidateEntry.name2 ? ` / ${candidateEntry.name2}` : ''}`
+          : expectedCandidateLoserId;
+
+        warnings.push(
+          `Data pihak kalah Final tidak konsisten. Runner-up seharusnya ${candidateName}.`
+        );
+      }
+
+      // Final Loser -> Placement 2
+      podiumEntries.push({
+        placement: 2,
+        entryId: effectiveLoserId,
+        label: 'Runner-up',
+        sourceType: 'final_loser',
+        sourceMatchId: finalMatch.id,
+        isShared: false
+      });
+    }
   }
 
   // 2. Identify 3rd/4th place based on thirdPlaceMode

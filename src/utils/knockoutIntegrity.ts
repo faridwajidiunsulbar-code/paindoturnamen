@@ -115,11 +115,47 @@ export function validateKnockoutIntegrity(
     }
   }
 
-  // Check 2: Match count per round
+  // Check 2: Match count per round & Final variant detection
   const mainMatches = matches.filter(m => !m.isBronzeMatch && m.roundName !== 'Perebutan Juara 3');
   const expectedMainCount = bracketSize - 1;
   if (mainMatches.length !== expectedMainCount) {
     errors.push(`Jumlah pertandingan utama (${mainMatches.length}) tidak sesuai dengan ukuran bracket ${bracketSize} (seharusnya ${expectedMainCount}).`);
+  }
+
+  // Explicit Final verification
+  const explicitFinalMatches = matches.filter(m => {
+    const rName = (m.roundName || '').trim().toLowerCase();
+    const stage = ((m as any).stage || '').trim().toLowerCase();
+    const round = ((m as any).round || '').trim().toLowerCase();
+    return !m.isBronzeMatch && (rName === 'final' || stage === 'final' || round === 'final');
+  });
+
+  if (explicitFinalMatches.length > 1) {
+    errors.push(`Terdeteksi lebih dari satu pertandingan Final (${explicitFinalMatches.length}).`);
+  } else if (explicitFinalMatches.length === 0) {
+    const fallbackFinals = matches.filter(m => !m.nextMatchNum && !m.isBronzeMatch && (m.roundName || '').trim().toLowerCase() !== 'perebutan juara 3');
+    if (fallbackFinals.length === 0) {
+      errors.push('Tidak ada pertandingan Final yang terdeteksi pada bracket.');
+    } else if (fallbackFinals.length > 1) {
+      warnings.push(`Tidak ada pertandingan berketerangan Final eksplisit, dan terdapat ${fallbackFinals.length} pertandingan terminal.`);
+    }
+  }
+
+  // Check orphan terminal matches (matches without nextMatchNum that are not valid Final)
+  const orphanTerminalMatches = matches.filter(m => {
+    if (m.nextMatchNum || m.isBronzeMatch || (m.roundName || '').trim().toLowerCase() === 'perebutan juara 3') return false;
+    const rName = (m.roundName || '').trim().toLowerCase();
+    const isExplicitFinal = rName === 'final' || ((m as any).stage || '').trim().toLowerCase() === 'final';
+    if (isExplicitFinal) return false;
+
+    const feeders = matches.filter(fm => fm.nextMatchNum === m.matchNum);
+    const isFedBySF = feeders.filter(fm => (fm.roundName || '').trim().toLowerCase() === 'semifinal').length === 2;
+    const isCanonical = m.matchNum === 3 || m.matchNum === 7 || m.matchNum === 15 || m.matchNum === 31;
+    return !isFedBySF && !isCanonical;
+  });
+
+  for (const orphan of orphanTerminalMatches) {
+    warnings.push(`Pertandingan #${orphan.matchNum} (${orphan.roundName || 'Lainnya'}) tidak memiliki nextMatchNum tetapi bukan Final sah (match orphan).`);
   }
 
   const bronzeMatch = matches.find(m => m.isBronzeMatch || m.roundName === 'Perebutan Juara 3');

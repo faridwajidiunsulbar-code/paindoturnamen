@@ -207,6 +207,16 @@ export interface Division {
   status?: 'pending' | 'group_stage' | 'knockout_stage' | 'completed' | 'finalized';
 }
 
+export interface TournamentClosure {
+  isClosed: boolean;
+  closedAt?: string | null;
+  closedBy?: string | null;
+  closeReason?: string | null;
+  reopenedAt?: string | null;
+  reopenedBy?: string | null;
+  reopenReason?: string | null;
+}
+
 export interface Tournament {
   id: string;
   name: string;
@@ -215,6 +225,14 @@ export interface Tournament {
   events: TournamentEvent[];
   ageGroups: AgeGroup[];
   activeDivisions: Division[];
+  status?: 'active' | 'completed' | 'archived' | 'closed';
+  isClosed?: boolean;
+  closedAt?: string | null;
+  closedBy?: string | null;
+  closeReason?: string | null;
+  reopenedAt?: string | null;
+  reopenedBy?: string | null;
+  reopenReason?: string | null;
   ownerId?: string;
   updatedAt?: string;
   cloudSyncedAt?: string;

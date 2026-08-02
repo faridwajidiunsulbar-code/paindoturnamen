@@ -36,9 +36,10 @@ interface DivisionRoundRobinProps {
   division: Division;
   onUpdateDivision: (updated: Division) => void;
   isAdmin?: boolean;
+  isReadOnly?: boolean;
 }
 
-export default function DivisionRoundRobin({ division, onUpdateDivision, isAdmin = true }: DivisionRoundRobinProps) {
+export default function DivisionRoundRobin({ division, onUpdateDivision, isAdmin = true, isReadOnly = false }: DivisionRoundRobinProps) {
   const { entries, groups, roundRobinMatches, settings } = division;
 
   // Selected Group Filter

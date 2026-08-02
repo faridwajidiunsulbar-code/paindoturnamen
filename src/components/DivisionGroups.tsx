@@ -13,9 +13,10 @@ interface DivisionGroupsProps {
   division: Division;
   onUpdateDivision: (updated: Division) => void;
   isAdmin?: boolean;
+  isReadOnly?: boolean;
 }
 
-export default function DivisionGroups({ division, onUpdateDivision, isAdmin = true }: DivisionGroupsProps) {
+export default function DivisionGroups({ division, onUpdateDivision, isAdmin = true, isReadOnly = false }: DivisionGroupsProps) {
   const { entries, groups, settings, roundRobinMatches } = division;
 
   // Lock status check

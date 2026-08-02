@@ -27,9 +27,10 @@ interface DivisionEntriesProps {
   isDouble: boolean;
   onUpdateDivision: (updated: Division) => void;
   isAdmin?: boolean;
+  isReadOnly?: boolean;
 }
 
-export default function DivisionEntries({ division, isDouble, onUpdateDivision, isAdmin = true }: DivisionEntriesProps) {
+export default function DivisionEntries({ division, isDouble, onUpdateDivision, isAdmin = true, isReadOnly = false }: DivisionEntriesProps) {
   const [name1, setName1] = useState('');
   const [name2, setName2] = useState('');
   const [affiliation, setAffiliation] = useState('');

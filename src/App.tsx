@@ -25,6 +25,8 @@ import DivisionEntries from './components/DivisionEntries';
 import DivisionGroups from './components/DivisionGroups';
 import DivisionRoundRobin from './components/DivisionRoundRobin';
 import DivisionKnockout from './components/DivisionKnockout';
+import TournamentClosureSection from './components/TournamentClosureSection';
+import { isTournamentReadOnly } from './utils/closureHelpers';
 import { exportTournamentToPDF } from './utils/pdfExport';
 import { generateRoundRobinMatches } from './utils/tournamentHelpers';
 import { Match } from './types';
@@ -1234,7 +1236,12 @@ export default function App() {
                 </button>
               </>
             )}
-            {!isAdmin && (
+            {isTournamentReadOnly(tournament) && (
+              <span className="px-2.5 py-1 bg-amber-600 text-white rounded-full font-black text-[10px] uppercase tracking-wider flex items-center gap-1 shadow-xs">
+                🔒 Ditutup (Read-Only)
+              </span>
+            )}
+            {!isAdmin && !isTournamentReadOnly(tournament) && (
               <span className="px-2.5 py-1 bg-amber-500/10 text-amber-600 border border-amber-200 rounded-full font-black text-[10px] uppercase tracking-wider flex items-center gap-1">
                 👁️ Lihat Saja
               </span>
@@ -1253,7 +1260,15 @@ export default function App() {
         <div className="flex-1 p-6 md:p-8 overflow-y-auto" id="dynamic-content-scroller">
           
           {selectedMenu === 'dashboard' && (
-            <OverallSummary tournament={tournament} onNavigateToDivision={navigateToDivision} isAdmin={isAdmin} />
+            <div className="space-y-8">
+              <OverallSummary tournament={tournament} onNavigateToDivision={navigateToDivision} isAdmin={isAdmin} />
+              <TournamentClosureSection
+                tournament={tournament}
+                onUpdateTournament={updateTournamentState}
+                isAdmin={isAdmin}
+                currentUserEmail={user?.email || user?.user_metadata?.full_name || 'Admin'}
+              />
+            </div>
           )}
 
           {selectedMenu === 'config' && (
@@ -1366,6 +1381,7 @@ export default function App() {
                     isDouble={isDouble}
                     onUpdateDivision={handleUpdateDivision}
                     isAdmin={isAdmin}
+                    isReadOnly={isTournamentReadOnly(tournament)}
                   />
                 )}
 
@@ -1374,6 +1390,7 @@ export default function App() {
                     division={currentDiv}
                     onUpdateDivision={handleUpdateDivision}
                     isAdmin={isAdmin}
+                    isReadOnly={isTournamentReadOnly(tournament)}
                   />
                 )}
 
@@ -1382,6 +1399,7 @@ export default function App() {
                     division={currentDiv}
                     onUpdateDivision={handleUpdateDivision}
                     isAdmin={isAdmin}
+                    isReadOnly={isTournamentReadOnly(tournament)}
                   />
                 )}
 
@@ -1390,6 +1408,7 @@ export default function App() {
                     division={currentDiv}
                     onUpdateDivision={handleUpdateDivision}
                     isAdmin={isAdmin}
+                    isReadOnly={isTournamentReadOnly(tournament)}
                   />
                 )}
               </div>
