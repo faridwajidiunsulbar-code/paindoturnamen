@@ -4,6 +4,7 @@ import { getDbDivisionId } from './divisionService';
 import { getValidEntryId } from './entryService';
 import { getDbGroupId } from './groupService';
 import { saveTournamentToSupabase } from './tournamentService';
+import { toValidUuidOrNull, validateUuidFields } from '../utils/uuidUtils';
 
 /**
  * Save knockout slots and champions for a tournament to Supabase.
@@ -79,6 +80,13 @@ export async function saveKnockoutSlotsAndChampionsToSupabase(
       }
     });
 
+    // Retrieve current auth user ID for safe UUID assignment
+    const { data: authUserData } = await supabase.auth.getUser();
+    const currentUserId = authUserData?.user?.id ?? null;
+
+    // Diagnostic logging for Knockout save payloads
+    console.debug('KNOCKOUT SAVE PAYLOAD', { allKnockoutSlots, validActiveDivisions });
+
     if (allKnockoutSlots.length > 0) {
       const { error: slotError } = await supabase.from('knockout_slots').insert(allKnockoutSlots);
       if (slotError) {
@@ -103,6 +111,9 @@ export async function saveKnockoutSlotsAndChampionsToSupabase(
           .eq('division_id', dbDivId)
           .is('revoked_at', null);
 
+        // Sanitize official_by to ensure only valid UUID is assigned (never display names like "Arif")
+        const officialByUuid = toValidUuidOrNull(div.officialBy, toValidUuidOrNull(div.officialPodium?.officialBy, currentUserId));
+
         // Add new canonical active rows
         div.officialPodium.entries.forEach((pEntry, pIdx) => {
           const validId = getValidEntryId(pEntry.entryId, insertedEntryIds);
@@ -117,7 +128,7 @@ export async function saveKnockoutSlotsAndChampionsToSupabase(
               is_shared: !!pEntry.isShared,
               source_match_id: pEntry.sourceMatchId || null,
               official_at: div.officialPodium?.officialAt || new Date().toISOString(),
-              official_by: div.officialBy || div.officialPodium?.officialBy || null,
+              official_by: officialByUuid,
               revoked_at: null,
               revoked_reason: null
             });
@@ -144,6 +155,21 @@ export async function saveKnockoutSlotsAndChampionsToSupabase(
           third_place_entry_id: getValidEntryId(div.champions.thirdPlaceEntryId, insertedEntryIds)
         });
       }
+    }
+
+    console.debug('KNOCKOUT SAVE PAYLOAD CHAMPIONS', allChampions);
+
+    // Pre-save validator: verify official_by UUIDs before sending to Supabase
+    const champUuidCheck = validateUuidFields('champions', allChampions, ['official_by']);
+    if (!champUuidCheck.valid) {
+      return {
+        success: false,
+        error: {
+          module: 'knockout',
+          operation: 'insert',
+          message: champUuidCheck.error || 'Invalid UUID format in champions payload.'
+        }
+      };
     }
 
     if (allChampions.length > 0) {

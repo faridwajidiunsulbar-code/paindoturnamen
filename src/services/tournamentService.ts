@@ -6,6 +6,7 @@ import { saveGroupsAndMembersToSupabase, loadGroupsForTournament } from './group
 import { saveMatchesToSupabase, loadMatchesForTournament } from './matchService';
 import { saveKnockoutSlotsAndChampionsToSupabase, loadKnockoutSlotsAndChampionsForTournament } from './knockoutService';
 import { isTournamentReadOnly, validateTournamentClosureReadiness, validateTournamentIntegrityForClosure } from '../utils/closureHelpers';
+import { toValidUuidOrNull, validateUuidFields } from '../utils/uuidUtils';
 
 export interface UserProfile {
   id: string;
@@ -165,16 +166,16 @@ export async function saveTournamentToSupabase(
         status: tourneyStatus,
         is_closed: tournament.isClosed === true,
         closed_at: tournament.closedAt || null,
-        closed_by: tournament.closedBy || null,
+        closed_by: toValidUuidOrNull(tournament.closedBy, user?.id),
         close_reason: tournament.closeReason || null,
         reopened_at: tournament.reopenedAt || null,
-        reopened_by: tournament.reopenedBy || null,
+        reopened_by: toValidUuidOrNull(tournament.reopenedBy, user?.id),
         reopen_reason: tournament.reopenReason || null,
         revision: expectedRevision + 1,
         save_status: 'saving'
       };
       if (user?.id) {
-        reservePayload.owner_id = user.id;
+        reservePayload.owner_id = toValidUuidOrNull(user.id);
       }
 
       const { data: reservedData, error: reservationError } = await supabase
@@ -256,16 +257,16 @@ export async function saveTournamentToSupabase(
         status: tourneyStatus,
         is_closed: tournament.isClosed === true,
         closed_at: tournament.closedAt || null,
-        closed_by: tournament.closedBy || null,
+        closed_by: toValidUuidOrNull(tournament.closedBy, user?.id),
         close_reason: tournament.closeReason || null,
         reopened_at: tournament.reopenedAt || null,
-        reopened_by: tournament.reopenedBy || null,
+        reopened_by: toValidUuidOrNull(tournament.reopenedBy, user?.id),
         reopen_reason: tournament.reopenReason || null,
         revision: 1,
         save_status: 'saving'
       };
       if (user?.id) {
-        newPayload.owner_id = user.id;
+        newPayload.owner_id = toValidUuidOrNull(user.id);
       }
 
       const { data: insertedData, error: insertError } = await supabase
