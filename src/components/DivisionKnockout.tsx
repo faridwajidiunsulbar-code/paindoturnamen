@@ -412,10 +412,12 @@ export default function DivisionKnockout({ division, onUpdateDivision, isAdmin =
       return;
     }
 
+    const sanitizedName = endorseBy.trim().slice(0, 120) || null;
     const now = new Date().toISOString();
     const officialPodium: OfficialPodium = {
       officialAt: now,
-      officialBy: endorseBy.trim() || null,
+      officialName: sanitizedName,
+      officialBy: sanitizedName,
       entries: podiumPreview.entries
     };
 
@@ -423,7 +425,8 @@ export default function DivisionKnockout({ division, onUpdateDivision, isAdmin =
       ...division,
       podiumOfficial: true,
       officialAt: now,
-      officialBy: endorseBy.trim() || null,
+      officialName: sanitizedName,
+      officialBy: sanitizedName,
       officialPodium,
       revokedAt: null,
       podiumRevokedReason: null,
@@ -2269,7 +2272,9 @@ export default function DivisionKnockout({ division, onUpdateDivision, isAdmin =
                       </p>
                       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] font-mono text-emerald-900 mt-2">
                         <span>Waktu Pengesahan: <strong>{division.officialAt ? new Date(division.officialAt).toLocaleString('id-ID') : '-'}</strong></span>
-                        {division.officialBy && <span>Oleh Admin: <strong>{division.officialBy}</strong></span>}
+                        {(division.officialName || division.officialBy || division.officialPodium?.officialName || division.officialPodium?.officialBy) && (
+                          <span>Oleh Admin: <strong>{division.officialName || division.officialBy || division.officialPodium?.officialName || division.officialPodium?.officialBy}</strong></span>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -2952,12 +2957,18 @@ export default function DivisionKnockout({ division, onUpdateDivision, isAdmin =
               </div>
 
               <div className="space-y-2">
-                <label className="text-xs font-extrabold text-navy block">Identitas Official / Admin <span className="text-slate-400 font-normal">(Opsional)</span></label>
+                <label className="text-xs font-extrabold text-navy block">
+                  Nama Official / Admin untuk Ditampilkan <span className="text-slate-400 font-normal">(Opsional)</span>
+                </label>
+                <p className="text-[11px] text-slate-500 leading-normal">
+                  Nama ini disimpan sebagai identitas tampilan pada riwayat pengesahan. ID pengguna diambil otomatis dari akun yang sedang login.
+                </p>
                 <input
                   type="text"
                   value={endorseBy}
-                  onChange={e => setEndorseBy(e.target.value)}
-                  placeholder="Nama / User ID Admin Pengesah"
+                  onChange={e => setEndorseBy(e.target.value.slice(0, 120))}
+                  maxLength={120}
+                  placeholder="Contoh: Farid Wajidi atau Panitia Turnamen"
                   className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-navy font-medium"
                 />
               </div>

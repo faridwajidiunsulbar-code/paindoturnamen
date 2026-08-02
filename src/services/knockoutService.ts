@@ -4,7 +4,7 @@ import { getDbDivisionId } from './divisionService';
 import { getValidEntryId } from './entryService';
 import { getDbGroupId } from './groupService';
 import { saveTournamentToSupabase } from './tournamentService';
-import { toValidUuidOrNull, validateUuidFields } from '../utils/uuidUtils';
+import { isValidUuid, toValidUuidOrNull, validateUuidFields } from '../utils/uuidUtils';
 
 /**
  * Save knockout slots and champions for a tournament to Supabase.
@@ -81,8 +81,13 @@ export async function saveKnockoutSlotsAndChampionsToSupabase(
     });
 
     // Retrieve current auth user ID for safe UUID assignment
-    const { data: authUserData } = await supabase.auth.getUser();
-    const currentUserId = authUserData?.user?.id ?? null;
+    const { data: authUserData, error: authError } = await supabase.auth.getUser();
+    if (authError) {
+      console.warn('Gagal membaca identitas pengguna:', authError.message);
+    }
+    const authenticatedUserId = authUserData?.user?.id && isValidUuid(authUserData.user.id)
+      ? authUserData.user.id
+      : null;
 
     // Diagnostic logging for Knockout save payloads
     console.debug('KNOCKOUT SAVE PAYLOAD', { allKnockoutSlots, validActiveDivisions });
@@ -111,8 +116,14 @@ export async function saveKnockoutSlotsAndChampionsToSupabase(
           .eq('division_id', dbDivId)
           .is('revoked_at', null);
 
-        // Sanitize official_by to ensure only valid UUID is assigned (never display names like "Arif")
-        const officialByUuid = toValidUuidOrNull(div.officialBy, toValidUuidOrNull(div.officialPodium?.officialBy, currentUserId));
+        // Separate user ID UUID and display name
+        const candidateByUserId = div.officialByUserId || div.officialPodium?.officialByUserId;
+        const officialByUuid = isValidUuid(candidateByUserId) ? candidateByUserId : authenticatedUserId;
+
+        const rawName = div.officialName || div.officialPodium?.officialName || div.officialBy || div.officialPodium?.officialBy;
+        const officialName = typeof rawName === 'string' && !isValidUuid(rawName)
+          ? rawName.trim().slice(0, 120) || null
+          : (div.officialName?.trim().slice(0, 120) || div.officialPodium?.officialName?.trim().slice(0, 120) || null);
 
         // Add new canonical active rows
         div.officialPodium.entries.forEach((pEntry, pIdx) => {
@@ -129,6 +140,7 @@ export async function saveKnockoutSlotsAndChampionsToSupabase(
               source_match_id: pEntry.sourceMatchId || null,
               official_at: div.officialPodium?.officialAt || new Date().toISOString(),
               official_by: officialByUuid,
+              official_name: officialName,
               revoked_at: null,
               revoked_reason: null
             });

@@ -194,13 +194,26 @@ alter table public.knockout_slots enable row level security;
 create table if not exists public.champions (
     id text primary key,
     tournament_id text references public.tournaments(id) on delete cascade not null,
-    division_id text references public.divisions(id) on delete cascade not null unique,
+    division_id text references public.divisions(id) on delete cascade not null,
+    entry_id text references public.entries(id) on delete set null,
     champion_entry_id text references public.entries(id) on delete set null,
     runner_up_entry_id text references public.entries(id) on delete set null,
     third_place_entry_id text references public.entries(id) on delete set null,
+    placement integer,
+    placement_label text,
+    is_shared boolean default false,
+    source_match_id text,
+    official_at timestamp with time zone,
+    official_by uuid references public.profiles(id) on delete set null,
+    official_name text,
+    revoked_at timestamp with time zone,
+    revoked_reason text,
     created_at timestamp with time zone default timezone('utc'::text, now()) not null,
     updated_at timestamp with time zone default timezone('utc'::text, now()) not null
 );
+
+-- Ensure official_name column exists for display names (Hotfix: separate display name from official_by UUID)
+alter table public.champions add column if not exists official_name text;
 
 -- Enable RLS on champions
 alter table public.champions enable row level security;

@@ -178,6 +178,19 @@ export async function saveTournamentToSupabase(
         reservePayload.owner_id = toValidUuidOrNull(user.id);
       }
 
+      const reserveUuidCheck = validateUuidFields('tournaments', [reservePayload], ['closed_by', 'reopened_by', 'owner_id']);
+      if (!reserveUuidCheck.valid) {
+        return {
+          success: false,
+          error: {
+            code: 'INVALID_UUID_PAYLOAD',
+            module: 'tournament',
+            operation: 'save',
+            message: reserveUuidCheck.error || 'Invalid UUID payload for tournament'
+          }
+        };
+      }
+
       const { data: reservedData, error: reservationError } = await supabase
         .from('tournaments')
         .update(reservePayload)
@@ -267,6 +280,19 @@ export async function saveTournamentToSupabase(
       };
       if (user?.id) {
         newPayload.owner_id = toValidUuidOrNull(user.id);
+      }
+
+      const newUuidCheck = validateUuidFields('tournaments', [newPayload], ['closed_by', 'reopened_by', 'owner_id']);
+      if (!newUuidCheck.valid) {
+        return {
+          success: false,
+          error: {
+            code: 'INVALID_UUID_PAYLOAD',
+            module: 'tournament',
+            operation: 'save',
+            message: newUuidCheck.error || 'Invalid UUID payload for tournament'
+          }
+        };
       }
 
       const { data: insertedData, error: insertError } = await supabase
@@ -750,9 +776,14 @@ export async function loadTournamentFromSupabase(tournamentId: string): Promise<
           isShared: !!r.is_shared
         }));
 
+        const rowOfficialBy = activeCanonicalRows[0].official_by || null;
+        const rowOfficialName = activeCanonicalRows[0].official_name || null;
+
         officialPodium = {
           officialAt: activeCanonicalRows[0].official_at || div.official_at || new Date().toISOString(),
-          officialBy: activeCanonicalRows[0].official_by || null,
+          officialByUserId: rowOfficialBy,
+          officialName: rowOfficialName,
+          officialBy: rowOfficialName || rowOfficialBy || null,
           entries
         };
 
@@ -815,7 +846,9 @@ export async function loadTournamentFromSupabase(tournamentId: string): Promise<
         champions,
         podiumOfficial,
         officialAt: div.official_at || officialPodium?.officialAt || null,
-        officialBy: officialPodium?.officialBy || null,
+        officialByUserId: officialPodium?.officialByUserId || null,
+        officialName: officialPodium?.officialName || null,
+        officialBy: officialPodium?.officialName || officialPodium?.officialBy || null,
         officialPodium,
         revokedAt: div.revoked_at || null,
         podiumRevokedReason: div.podium_revoked_reason || null,

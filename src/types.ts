@@ -181,6 +181,8 @@ export interface DivisionPodiumPreview {
 
 export interface OfficialPodium {
   officialAt: string;
+  officialByUserId?: string | null;
+  officialName?: string | null;
   officialBy?: string | null;
   entries: PodiumEntry[];
   revokedAt?: string | null;
@@ -201,6 +203,8 @@ export interface Division {
   champions: Champions | null;
   podiumOfficial?: boolean;
   officialAt?: string | null;
+  officialByUserId?: string | null;
+  officialName?: string | null;
   officialBy?: string | null;
   officialPodium?: OfficialPodium | null;
   revokedAt?: string | null;
