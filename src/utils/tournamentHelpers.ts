@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { Match, Group, Entry, GroupStandingRow, DivisionSettings } from '../types';
+import { Match, Group, Entry, GroupStandingRow, DivisionSettings, KnockoutSlot, WildcardCandidate } from '../types';
 
 /**
  * Generate all round robin matches within a group (all-play-all exactly once).
@@ -348,9 +348,439 @@ export function calculateGroupStandings(
 }
 
 /**
- * Recommends which players advance to the Knockout Stage.
- * Direct qualifiers: Top N from each group.
- * Wildcards: Next-best players across all groups.
+ * Direct Qualifier item structure for PAINDO-008
+ */
+export interface DirectQualifier {
+  entryId: string;
+  groupId: string;
+  groupName: string;
+  groupRank: number;
+  sourceLabel: string;
+  qualificationType: 'group';
+  won: number;
+  pointsFor: number;
+  pointDifference: number;
+}
+
+/**
+ * Returns direct qualifiers for each group based on qualifyingCountPerGroup
+ */
+export function getDirectQualifiers(
+  allGroupStandings: Record<string, GroupStandingRow[]>,
+  groups: Group[],
+  qualifyingCountPerGroup: number
+): DirectQualifier[] {
+  const qualifiers: DirectQualifier[] = [];
+
+  groups.forEach(g => {
+    const standings = allGroupStandings[g.id] || [];
+    const directRows = standings.filter(r => r.rank <= qualifyingCountPerGroup);
+    directRows.forEach(row => {
+      let rankTitle = `Peringkat ${row.rank}`;
+      if (row.rank === 1) rankTitle = 'Juara';
+      else if (row.rank === 2) rankTitle = 'Runner-up';
+      
+      const label = `${rankTitle} ${g.name}`;
+      qualifiers.push({
+        entryId: row.entryId,
+        groupId: g.id,
+        groupName: g.name,
+        groupRank: row.rank,
+        sourceLabel: label,
+        qualificationType: 'group',
+        won: row.won,
+        pointsFor: row.pointsFor,
+        pointDifference: row.pointDifference
+      });
+    });
+  });
+
+  return qualifiers;
+}
+
+export interface WildcardAnalysisResult {
+  candidates: WildcardCandidate[];
+  wildcardsNeeded: number;
+  directQualifierCount: number;
+  isNormalizedStats: boolean;
+  hasTiedCluster: boolean;
+  requiresAdminDecision: boolean;
+  selectedWildcardEntryIds: string[];
+  invalidConfigMessage?: string;
+}
+
+/**
+ * Calculates wildcard rankings, candidate evaluation (total vs normalized), and tie handling
+ */
+export function getWildcardCandidateRankings(
+  allGroupStandings: Record<string, GroupStandingRow[]>,
+  groups: Group[],
+  qualifyingCountPerGroup: number,
+  bracketSize: number,
+  manualRankings?: Record<string, number>
+): WildcardAnalysisResult {
+  // 1. Gather Direct Qualifiers
+  const directQualifiers = getDirectQualifiers(allGroupStandings, groups, qualifyingCountPerGroup);
+  const directCount = directQualifiers.length;
+
+  const wildcardsNeeded = bracketSize - directCount;
+
+  if (wildcardsNeeded < 0) {
+    return {
+      candidates: [],
+      wildcardsNeeded,
+      directQualifierCount: directCount,
+      isNormalizedStats: false,
+      hasTiedCluster: false,
+      requiresAdminDecision: false,
+      selectedWildcardEntryIds: [],
+      invalidConfigMessage: `Jumlah peserta lolos langsung (${directCount}) melebihi slot bracket (${bracketSize}). Harap sesuaikan jumlah peserta lolos per grup atau ukuran bracket.`
+    };
+  }
+
+  if (wildcardsNeeded === 0) {
+    return {
+      candidates: [],
+      wildcardsNeeded: 0,
+      directQualifierCount: directCount,
+      isNormalizedStats: false,
+      hasTiedCluster: false,
+      requiresAdminDecision: false,
+      selectedWildcardEntryIds: []
+    };
+  }
+
+  // 2. Gather Candidates: group members ranked after qualifyingCountPerGroup
+  const rawCandidates: WildcardCandidate[] = [];
+
+  groups.forEach(g => {
+    const standings = allGroupStandings[g.id] || [];
+    const nonDirectRows = standings.filter(r => r.rank > qualifyingCountPerGroup);
+
+    nonDirectRows.forEach(row => {
+      const played = row.played || 0;
+      const won = row.won || 0;
+      const pointsFor = row.pointsFor || 0;
+      const pointsAgainst = row.pointsAgainst || 0;
+      const pointDifference = row.pointDifference || 0;
+
+      const winPercentage = played > 0 ? won / played : 0;
+      const avgPointsFor = played > 0 ? pointsFor / played : 0;
+      const avgPointDifference = played > 0 ? pointDifference / played : 0;
+
+      rawCandidates.push({
+        entryId: row.entryId,
+        groupId: g.id,
+        groupName: g.name,
+        groupRank: row.rank,
+        won,
+        played,
+        pointsFor,
+        pointsAgainst,
+        pointDifference,
+        winPercentage,
+        avgPointsFor,
+        avgPointDifference,
+        eligible: true
+      });
+    });
+  });
+
+  if (rawCandidates.length === 0) {
+    return {
+      candidates: [],
+      wildcardsNeeded,
+      directQualifierCount: directCount,
+      isNormalizedStats: false,
+      hasTiedCluster: false,
+      requiresAdminDecision: false,
+      selectedWildcardEntryIds: []
+    };
+  }
+
+  // 3. Determine whether played count differs across candidate groups
+  const playedCounts = new Set(rawCandidates.map(c => c.played));
+  const isNormalizedStats = playedCounts.size > 1;
+
+  // Helper sorting comparator
+  const compareCandidates = (a: WildcardCandidate, b: WildcardCandidate): number => {
+    if (isNormalizedStats) {
+      if (Math.abs(b.winPercentage - a.winPercentage) > 1e-9) return b.winPercentage - a.winPercentage;
+      if (Math.abs(b.avgPointsFor - a.avgPointsFor) > 1e-9) return b.avgPointsFor - a.avgPointsFor;
+      if (Math.abs(b.avgPointDifference - a.avgPointDifference) > 1e-9) return b.avgPointDifference - a.avgPointDifference;
+      return 0;
+    } else {
+      if (b.won !== a.won) return b.won - a.won;
+      if (b.pointsFor !== a.pointsFor) return b.pointsFor - a.pointsFor;
+      if (b.pointDifference !== a.pointDifference) return b.pointDifference - a.pointDifference;
+      return 0;
+    }
+  };
+
+  // Sort candidate list
+  rawCandidates.sort(compareCandidates);
+
+  // 4. Group candidates into tied clusters
+  const clusters: WildcardCandidate[][] = [];
+  let currentCluster: WildcardCandidate[] = [];
+
+  rawCandidates.forEach(cand => {
+    if (currentCluster.length === 0) {
+      currentCluster.push(cand);
+    } else {
+      const prev = currentCluster[0];
+      if (compareCandidates(prev, cand) === 0) {
+        currentCluster.push(cand);
+      } else {
+        clusters.push(currentCluster);
+        currentCluster = [cand];
+      }
+    }
+  });
+  if (currentCluster.length > 0) clusters.push(currentCluster);
+
+  // Apply admin manualRankings if provided
+  const finalCandidates: WildcardCandidate[] = [];
+  let requiresAdminDecision = false;
+  let hasTiedCluster = false;
+  let accumulatedCount = 0;
+
+  clusters.forEach(cluster => {
+    const clusterStartIdx = accumulatedCount + 1;
+    const clusterEndIdx = accumulatedCount + cluster.length;
+
+    // Check if this cluster crosses the wildcardsNeeded boundary
+    const crossesBoundary = clusterStartIdx <= wildcardsNeeded && clusterEndIdx > wildcardsNeeded;
+
+    if (cluster.length > 1) {
+      cluster.forEach(c => c.tieStatus = true);
+      hasTiedCluster = true;
+
+      // Check if manualRankings covers all entries in this cluster
+      const hasAllAdminOverrides = manualRankings && cluster.every(c => typeof manualRankings[c.entryId] === 'number');
+
+      if (crossesBoundary && !hasAllAdminOverrides) {
+        requiresAdminDecision = true;
+      }
+
+      if (hasAllAdminOverrides) {
+        cluster.sort((a, b) => (manualRankings![a.entryId] || 999) - (manualRankings![b.entryId] || 999));
+        cluster.forEach(c => c.manualOverrideRank = manualRankings![c.entryId]);
+      }
+    } else {
+      cluster[0].tieStatus = false;
+    }
+
+    finalCandidates.push(...cluster);
+    accumulatedCount += cluster.length;
+  });
+
+  // Assign wildcardRank (1, 2, 3...)
+  finalCandidates.forEach((c, idx) => {
+    c.wildcardRank = idx + 1;
+  });
+
+  const selectedWildcards = finalCandidates
+    .slice(0, wildcardsNeeded)
+    .map(c => c.entryId);
+
+  return {
+    candidates: finalCandidates,
+    wildcardsNeeded,
+    directQualifierCount: directCount,
+    isNormalizedStats,
+    hasTiedCluster,
+    requiresAdminDecision,
+    selectedWildcardEntryIds: selectedWildcards
+  };
+}
+
+export interface SeedingResult {
+  slots: KnockoutSlot[];
+  confirmedEntryIds: string[];
+  groupCollisionWarning?: string;
+  hasByeSlots: boolean;
+}
+
+/**
+ * Builds seeding tiers and places participants into knockout bracket slots with same-group avoidance
+ */
+export function buildSeedingAndSlots(
+  allGroupStandings: Record<string, GroupStandingRow[]>,
+  groups: Group[],
+  qualifyingCountPerGroup: number,
+  selectedWildcardEntryIds: string[],
+  wildcardCandidates: WildcardCandidate[],
+  bracketSize: number
+): SeedingResult {
+  // 1. Gather Direct Qualifiers
+  const direct = getDirectQualifiers(allGroupStandings, groups, qualifyingCountPerGroup);
+
+  // Group direct qualifiers into tiers (Tier 1 = Juara 1, Tier 2 = Juara 2, Tier 3 = Juara 3...)
+  const directByRank: Record<number, DirectQualifier[]> = {};
+  direct.forEach(q => {
+    if (!directByRank[q.groupRank]) directByRank[q.groupRank] = [];
+    directByRank[q.groupRank].push(q);
+  });
+
+  // Sort each direct tier deterministically (by won desc -> pointsFor desc -> pointDifference desc -> groupName asc)
+  Object.keys(directByRank).forEach(rk => {
+    const rankNum = Number(rk);
+    directByRank[rankNum].sort((a, b) => {
+      if (b.won !== a.won) return b.won - a.won;
+      if (b.pointsFor !== a.pointsFor) return b.pointsFor - a.pointsFor;
+      if (b.pointDifference !== a.pointDifference) return b.pointDifference - a.pointDifference;
+      return a.groupName.localeCompare(b.groupName);
+    });
+  });
+
+  // Construct tiered list of entries
+  const tieredEntries: Array<{
+    entryId: string;
+    sourceLabel: string;
+    qualificationType: 'group' | 'wildcard' | 'bye';
+    groupId?: string;
+    groupName?: string;
+    groupRank?: number;
+    wildcardRank?: number;
+    tier: number;
+  }> = [];
+
+  // Add Direct Qualifiers tier by tier
+  const sortedRanks = Object.keys(directByRank).map(Number).sort((a, b) => a - b);
+  sortedRanks.forEach(rk => {
+    directByRank[rk].forEach(q => {
+      tieredEntries.push({
+        entryId: q.entryId,
+        sourceLabel: q.sourceLabel,
+        qualificationType: 'group',
+        groupId: q.groupId,
+        groupName: q.groupName,
+        groupRank: q.groupRank,
+        tier: rk
+      });
+    });
+  });
+
+  // Add Selected Wildcards (Tier = maxRank + 1)
+  const maxDirectRank = sortedRanks.length > 0 ? Math.max(...sortedRanks) : 1;
+  const wildcardTier = maxDirectRank + 1;
+
+  selectedWildcardEntryIds.forEach((wId, idx) => {
+    const cand = wildcardCandidates.find(c => c.entryId === wId);
+    const label = cand
+      ? `Wildcard ${idx + 1} (${cand.groupName}, R${cand.groupRank})`
+      : `Wildcard ${idx + 1}`;
+
+    tieredEntries.push({
+      entryId: wId,
+      sourceLabel: label,
+      qualificationType: 'wildcard',
+      groupId: cand?.groupId,
+      groupName: cand?.groupName,
+      groupRank: cand?.groupRank,
+      wildcardRank: idx + 1,
+      tier: wildcardTier
+    });
+  });
+
+  // Add BYE slots if needed to reach bracketSize
+  const byeTier = wildcardTier + 1;
+  while (tieredEntries.length < bracketSize) {
+    const byeNo = tieredEntries.length + 1;
+    tieredEntries.push({
+      entryId: 'BYE',
+      sourceLabel: `BYE Slot ${byeNo}`,
+      qualificationType: 'bye',
+      tier: byeTier
+    });
+  }
+
+  // Trim to bracketSize if needed
+  const finalParticipants = tieredEntries.slice(0, bracketSize);
+
+  // Standard Seed Positions mapping for Bracket Sizes (4, 8, 16, 32)
+  let seedPattern: number[] = [];
+
+  if (bracketSize === 4) {
+    seedPattern = [1, 4, 2, 3];
+  } else if (bracketSize === 8) {
+    seedPattern = [1, 8, 4, 5, 2, 7, 3, 6];
+  } else if (bracketSize === 16) {
+    seedPattern = [1, 16, 8, 9, 4, 13, 5, 12, 2, 15, 7, 10, 3, 14, 6, 11];
+  } else {
+    seedPattern = Array.from({ length: bracketSize }, (_, i) => i + 1);
+  }
+
+  const slotList: KnockoutSlot[] = Array(bracketSize).fill(null);
+
+  seedPattern.forEach((seedNum, slotIndex) => {
+    const pIndex = seedNum - 1;
+    const p = finalParticipants[pIndex] || {
+      entryId: 'BYE',
+      sourceLabel: `BYE Slot`,
+      qualificationType: 'bye' as const,
+      tier: byeTier
+    };
+
+    slotList[slotIndex] = {
+      seedNo: seedNum,
+      entryId: p.entryId === 'BYE' ? null : p.entryId,
+      sourceLabel: p.sourceLabel,
+      isWildcard: p.qualificationType === 'wildcard',
+      isBye: p.qualificationType === 'bye' || p.entryId === 'BYE',
+      sourceGroupId: p.groupId,
+      sourceGroupName: p.groupName,
+      sourceGroupRank: p.groupRank,
+      qualificationType: p.qualificationType,
+      wildcardRank: p.wildcardRank
+    };
+  });
+
+  // Evaluate same-group collision in Round 1
+  let groupCollisionWarning: string | undefined = undefined;
+
+  for (let i = 0; i < bracketSize / 2; i++) {
+    const s1 = slotList[2 * i];
+    const s2 = slotList[2 * i + 1];
+
+    if (s1 && s2 && s1.sourceGroupId && s2.sourceGroupId && s1.sourceGroupId === s2.sourceGroupId) {
+      let swapped = false;
+      for (let j = 0; j < bracketSize / 2; j++) {
+        if (i === j) continue;
+        const candidateSlot = slotList[2 * j + 1];
+        if (
+          candidateSlot &&
+          candidateSlot.sourceGroupId !== s1.sourceGroupId &&
+          candidateSlot.sourceGroupId !== s2.sourceGroupId
+        ) {
+          const temp = slotList[2 * i + 1];
+          slotList[2 * i + 1] = slotList[2 * j + 1];
+          slotList[2 * j + 1] = temp;
+          swapped = true;
+          break;
+        }
+      }
+
+      if (!swapped) {
+        groupCollisionWarning = `Peringatan: Peserta dari ${s1.sourceGroupName} terpasang pada ronde pertama di bracket (Secara matematis tidak dapat dihindari dengan jumlah grup/bracket yang ada).`;
+      }
+    }
+  }
+
+  const confirmedEntryIds = slotList.map(s => (s.isBye || !s.entryId) ? 'BYE' : s.entryId);
+  const hasByeSlots = slotList.some(s => s.isBye);
+
+  return {
+    slots: slotList,
+    confirmedEntryIds,
+    groupCollisionWarning,
+    hasByeSlots
+  };
+}
+
+/**
+ * Backward-compatible helper wrapper
  */
 export function getWildcardRecommendations(
   allGroupStandings: Record<string, GroupStandingRow[]>,
@@ -360,10 +790,8 @@ export function getWildcardRecommendations(
   const direct: string[] = [];
   const nextBestList: GroupStandingRow[] = [];
 
-  // Gather direct qualifiers and potential wildcards
   Object.keys(allGroupStandings).forEach(groupId => {
     const groupStandings = allGroupStandings[groupId];
-    
     groupStandings.forEach(row => {
       if (row.rank <= qualifyingCountPerGroup) {
         direct.push(row.entryId);
@@ -373,8 +801,6 @@ export function getWildcardRecommendations(
     });
   });
 
-  // Sort potential wildcards to find the best ones
-  // Wildcard tie-breaker: Wins -> Point Difference -> Points For
   nextBestList.sort((a, b) => {
     if (b.won !== a.won) return b.won - a.won;
     if (b.pointDifference !== a.pointDifference) return b.pointDifference - a.pointDifference;

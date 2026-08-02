@@ -67,10 +67,52 @@ export interface DivisionSettings {
   byeActive: boolean;
 }
 
+export interface KnockoutSlot {
+  seedNo: number;
+  entryId: string | null;
+  sourceLabel?: string;
+  isWildcard?: boolean;
+  isBye?: boolean;
+  sourceGroupId?: string;
+  sourceGroupName?: string;
+  sourceGroupRank?: number;
+  qualificationType?: 'group' | 'wildcard' | 'bye';
+  wildcardRank?: number;
+}
+
+export interface WildcardCandidate {
+  entryId: string;
+  groupId: string;
+  groupName: string;
+  groupRank: number;
+  won: number;
+  played: number;
+  pointsFor: number;
+  pointsAgainst: number;
+  pointDifference: number;
+  winPercentage: number;
+  avgPointsFor: number;
+  avgPointDifference: number;
+  tieStatus?: boolean;
+  eligible: boolean;
+  ineligibleReason?: string;
+  wildcardRank?: number;
+  manualOverrideRank?: number;
+}
+
 export interface KnockoutStage {
   matches: Match[];
   isLocked: boolean; // if true, bracket is locked and we can play; if false, we can rearrange seeds
   confirmedEntryIds: string[]; // Qualified entries in order of seed
+  slots?: KnockoutSlot[];
+  wildcardCandidates?: WildcardCandidate[];
+  wildcardManualRankings?: Record<string, number>;
+  wildcardManualReason?: string;
+  wildcardManualCluster?: {
+    entryIds: string[];
+    rankingMode: 'total' | 'normalized';
+  };
+  invalidatedReason?: string;
 }
 
 export interface Champions {

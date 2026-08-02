@@ -76,6 +76,9 @@ create table if not exists public.divisions (
     wildcard_enabled boolean default false not null,
     bye_enabled boolean default false not null,
     status text default 'pending' check (status in ('pending', 'group_stage', 'knockout_stage', 'completed')),
+    wildcard_manual_rankings jsonb,
+    wildcard_manual_reason text,
+    wildcard_manual_cluster jsonb,
     created_at timestamp with time zone default timezone('utc'::text, now()) not null,
     updated_at timestamp with time zone default timezone('utc'::text, now()) not null,
     unique(tournament_id, match_type_id, age_group_id)
@@ -161,6 +164,10 @@ create table if not exists public.knockout_slots (
     source_label text, -- e.g., 'Juara Grup A', 'Runner-up Grup B'
     is_wildcard boolean default false not null,
     is_bye boolean default false not null,
+    source_group_id text references public.division_groups(id) on delete set null,
+    source_group_rank integer,
+    qualification_type text check (qualification_type is null or qualification_type in ('group', 'wildcard', 'bye')),
+    wildcard_rank integer,
     created_at timestamp with time zone default timezone('utc'::text, now()) not null
 );
 

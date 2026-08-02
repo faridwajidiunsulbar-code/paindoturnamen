@@ -2,6 +2,7 @@ import { supabase, isSupabaseConfigured } from '../lib/supabaseClient';
 import { Tournament, KnockoutStage, ServiceResult } from '../types';
 import { getDbDivisionId } from './divisionService';
 import { getValidEntryId } from './entryService';
+import { getDbGroupId } from './groupService';
 import { saveTournamentToSupabase } from './tournamentService';
 
 /**
@@ -36,18 +37,50 @@ export async function saveKnockoutSlotsAndChampionsToSupabase(
     const allKnockoutSlots: any[] = [];
     validActiveDivisions.forEach(div => {
       const dbDivId = getDbDivisionId(div.id, tournament.id);
-      if (div.knockoutStage && div.knockoutStage.confirmedEntryIds) {
-        div.knockoutStage.confirmedEntryIds.forEach((entId, idx) => {
-          allKnockoutSlots.push({
-            tournament_id: tournament.id,
-            division_id: dbDivId,
-            seed_no: idx + 1,
-            entry_id: getValidEntryId(entId, insertedEntryIds),
-            source_label: `Seed ${idx + 1}`,
-            is_wildcard: false,
-            is_bye: entId === 'BYE'
+      if (div.knockoutStage) {
+        if (div.knockoutStage.slots && div.knockoutStage.slots.length > 0) {
+          div.knockoutStage.slots.forEach(slot => {
+            const isBye = !slot.entryId || slot.entryId === 'BYE' || !!slot.isBye || slot.qualificationType === 'bye';
+            const isWildcard = !isBye && (slot.qualificationType === 'wildcard' || !!slot.isWildcard);
+            const qualType = isBye ? 'bye' : (isWildcard ? 'wildcard' : 'group');
+
+            let dbGrpId: string | null = null;
+            if (qualType !== 'bye' && slot.sourceGroupId) {
+              dbGrpId = getDbGroupId(slot.sourceGroupId, dbDivId);
+            }
+
+            allKnockoutSlots.push({
+              tournament_id: tournament.id,
+              division_id: dbDivId,
+              seed_no: slot.seedNo,
+              entry_id: isBye ? null : getValidEntryId(slot.entryId, insertedEntryIds),
+              source_label: slot.sourceLabel || `Seed ${slot.seedNo}`,
+              is_wildcard: qualType === 'wildcard',
+              is_bye: qualType === 'bye',
+              source_group_id: dbGrpId,
+              source_group_rank: qualType === 'bye' ? null : (slot.sourceGroupRank ?? null),
+              qualification_type: qualType,
+              wildcard_rank: qualType === 'wildcard' ? (slot.wildcardRank ?? null) : null
+            });
           });
-        });
+        } else if (div.knockoutStage.confirmedEntryIds) {
+          div.knockoutStage.confirmedEntryIds.forEach((entId, idx) => {
+            const isBye = !entId || entId === 'BYE';
+            allKnockoutSlots.push({
+              tournament_id: tournament.id,
+              division_id: dbDivId,
+              seed_no: idx + 1,
+              entry_id: isBye ? null : getValidEntryId(entId, insertedEntryIds),
+              source_label: `Seed ${idx + 1}`,
+              is_wildcard: false,
+              is_bye: isBye,
+              source_group_id: null,
+              source_group_rank: null,
+              qualification_type: isBye ? 'bye' : 'group',
+              wildcard_rank: null
+            });
+          });
+        }
       }
     });
 

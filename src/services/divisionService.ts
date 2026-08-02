@@ -136,7 +136,10 @@ export async function saveDivisionsToSupabase(tournament: Tournament): Promise<S
           knockout_size: div.settings.bracketSize,
           wildcard_enabled: div.settings.wildcardActive,
           bye_enabled: div.settings.byeActive,
-          status: div.knockoutStage ? 'knockout_stage' : (div.groups.length > 0 ? 'group_stage' : 'pending')
+          status: div.knockoutStage ? 'knockout_stage' : (div.groups.length > 0 ? 'group_stage' : 'pending'),
+          wildcard_manual_rankings: div.knockoutStage?.wildcardManualRankings && typeof div.knockoutStage.wildcardManualRankings === 'object' ? div.knockoutStage.wildcardManualRankings : null,
+          wildcard_manual_reason: div.knockoutStage?.wildcardManualReason?.trim() || null,
+          wildcard_manual_cluster: div.knockoutStage?.wildcardManualCluster || null
         });
       });
 

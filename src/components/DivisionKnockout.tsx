@@ -4,9 +4,9 @@
  */
 
 import React, { useState } from 'react';
-import { Division, Match, Entry, GroupStandingRow, KnockoutStage, Champions } from '../types';
-import { calculateGroupStandings, getWildcardRecommendations, generateKnockoutBracket, propagateKnockoutResult } from '../utils/tournamentHelpers';
-import { Trophy, Check, Edit3, Lock, Unlock, Play, HelpCircle, ChevronRight, AlertTriangle, ArrowRight, RefreshCw, X } from 'lucide-react';
+import { Division, Match, Entry, GroupStandingRow, KnockoutStage, Champions, KnockoutSlot, WildcardCandidate } from '../types';
+import { calculateGroupStandings, getDirectQualifiers, getWildcardCandidateRankings, buildSeedingAndSlots, generateKnockoutBracket, propagateKnockoutResult } from '../utils/tournamentHelpers';
+import { Trophy, Check, Edit3, Lock, Unlock, Play, HelpCircle, ChevronRight, AlertTriangle, ArrowRight, RefreshCw, X, ShieldAlert, Award } from 'lucide-react';
 
 interface DivisionKnockoutProps {
   division: Division;
@@ -20,6 +20,15 @@ export default function DivisionKnockout({ division, onUpdateDivision, isAdmin =
   // Seeding local selection before locking
   const [selectedSeeds, setSelectedSeeds] = useState<string[]>([]);
   
+  // Wildcard tie admin decision modal state
+  const [showWildcardTieModal, setShowWildcardTieModal] = useState(false);
+  const [wildcardManualRankings, setWildcardManualRankings] = useState<Record<string, number>>(
+    knockoutStage?.wildcardManualRankings || {}
+  );
+  const [wildcardManualReason, setWildcardManualReason] = useState<string>(
+    knockoutStage?.wildcardManualReason || ''
+  );
+
   // Custom dialog states to bypass standard browser alert/confirm iframe limits
   const [showConfirm, setShowConfirm] = useState<{
     title: string;
@@ -39,19 +48,69 @@ export default function DivisionKnockout({ division, onUpdateDivision, isAdmin =
   const [koStatus, setKoStatus] = useState<'belum_dimainkan' | 'selesai' | 'walkover'>('selesai');
   const [koWinner, setKoWinner] = useState<string>('');
 
-  // 1. COMPUTE AUTOMATIC RECOMMENDATIONS
+  // Auto-invalidation check for stale wildcard decisions before KO has completed matches
+  React.useEffect(() => {
+    if (knockoutStage && !knockoutStage.isLocked) {
+      if (knockoutStage.wildcardManualCluster) {
+        const currentTiedEntryIds = wildcardAnalysis.candidates
+          .filter(c => c.tieStatus)
+          .map(c => c.entryId)
+          .sort();
+        const storedTiedEntryIds = [...knockoutStage.wildcardManualCluster.entryIds].sort();
+        const currentMode = wildcardAnalysis.isNormalizedStats ? 'normalized' : 'total';
+
+        const sameMode = knockoutStage.wildcardManualCluster.rankingMode === currentMode;
+        const sameCluster =
+          currentTiedEntryIds.length === storedTiedEntryIds.length &&
+          currentTiedEntryIds.every((id, idx) => id === storedTiedEntryIds[idx]);
+
+        if (!sameMode || !sameCluster) {
+          console.warn('[Invalidation] Group standings or tie cluster changed before KO start. Clearing stale wildcard decision.');
+          onUpdateDivision({
+            ...division,
+            knockoutStage: {
+              ...knockoutStage,
+              wildcardManualRankings: undefined,
+              wildcardManualReason: undefined,
+              wildcardManualCluster: undefined,
+              invalidatedReason: 'Hasil grup berubah. Keputusan wildcard lama diinvalidasi.'
+            }
+          });
+          setWildcardManualRankings({});
+          setWildcardManualReason('');
+        }
+      }
+    }
+  }, [roundRobinMatches, groups, settings]);
+
+  // 1. COMPUTE PAINDO-008 STANDINGS, QUALIFIERS, WILDCARDS, & SEEDING
   const standingsByGroup: Record<string, GroupStandingRow[]> = {};
   groups.forEach(g => {
     standingsByGroup[g.id] = calculateGroupStandings(g, roundRobinMatches, entries, settings.playersQualifyingPerGroup || 2);
   });
 
-  const { direct, wildcards, nextBestList } = getWildcardRecommendations(
+  const directQualifiers = getDirectQualifiers(
     standingsByGroup,
-    settings.playersQualifyingPerGroup,
-    settings.bracketSize
+    groups,
+    settings.playersQualifyingPerGroup || 2
   );
 
-  const recommendedIds = [...direct, ...wildcards].slice(0, settings.bracketSize);
+  const wildcardAnalysis = getWildcardCandidateRankings(
+    standingsByGroup,
+    groups,
+    settings.playersQualifyingPerGroup || 2,
+    settings.bracketSize,
+    knockoutStage?.wildcardManualRankings || wildcardManualRankings
+  );
+
+  const seedingAnalysis = buildSeedingAndSlots(
+    standingsByGroup,
+    groups,
+    settings.playersQualifyingPerGroup || 2,
+    wildcardAnalysis.selectedWildcardEntryIds,
+    wildcardAnalysis.candidates,
+    settings.bracketSize
+  );
 
   // Helper check for Group Phase completion & resolved tie-breakers
   const checkGroupPhaseReadiness = (): boolean => {
@@ -65,7 +124,7 @@ export default function DivisionKnockout({ division, onUpdateDivision, isAdmin =
       return false;
     }
 
-    // 2. Check unresolved boundary ties
+    // 2. Check unresolved boundary ties in groups
     const groupsWithBoundaryTies = groups.filter(g => {
       const rows = standingsByGroup[g.id] || [];
       return rows.some(r => r.isTieBoundary && (!g.manualRankings || !g.manualRankings[r.entryId]));
@@ -80,29 +139,42 @@ export default function DivisionKnockout({ division, onUpdateDivision, isAdmin =
       return false;
     }
 
+    // 3. Check invalid config (direct qualifiers > bracket size)
+    if (wildcardAnalysis.invalidConfigMessage) {
+      setShowAlert({
+        title: 'Konfigurasi Tidak Valid ⚠️',
+        message: wildcardAnalysis.invalidConfigMessage
+      });
+      return false;
+    }
+
+    // 4. Check unresolved wildcard ties
+    if (wildcardAnalysis.requiresAdminDecision) {
+      setShowAlert({
+        title: 'Keputusan Admin Wildcard Diperlukan ⚠️',
+        message: 'Terdapat seri/tie pada kandidat wildcard yang melintasi batas kelolosan wildcard. Silakan gunakan tombol "Atur Keputusan Admin Wildcard" untuk menentukan peringkat kandidat secara manual beserta alasannya.'
+      });
+      setShowWildcardTieModal(true);
+      return false;
+    }
+
     return true;
   };
 
   // Initialize Seeding State if not done yet
   const handleStartSeedingSetup = () => {
     if (!checkGroupPhaseReadiness()) return;
-    setSelectedSeeds(recommendedIds);
+    setSelectedSeeds(seedingAnalysis.confirmedEntryIds);
   };
 
   // Build bracket with current selected seeds
   const handleGenerateBracket = () => {
     if (!checkGroupPhaseReadiness()) return;
 
-    if (selectedSeeds.length === 0) {
-      setShowAlert({
-        title: 'Harap Konfirmasi Peserta',
-        message: 'Harap konfirmasi list peserta terlebih dahulu.'
-      });
-      return;
-    }
+    const confirmedIds = selectedSeeds.length > 0 ? selectedSeeds : seedingAnalysis.confirmedEntryIds;
 
     // Validation: prevent duplicate player assignment in bracket seeds
-    const nonByeSeeds = selectedSeeds.filter(s => s && s !== 'BYE');
+    const nonByeSeeds = confirmedIds.filter(s => s && s !== 'BYE');
     const uniqueSeeds = new Set(nonByeSeeds);
     if (uniqueSeeds.size !== nonByeSeeds.length) {
       setShowAlert({
@@ -112,18 +184,28 @@ export default function DivisionKnockout({ division, onUpdateDivision, isAdmin =
       return;
     }
 
-    const bracketMatches = generateKnockoutBracket(division.id, selectedSeeds, settings.bracketSize);
+    const bracketMatches = generateKnockoutBracket(division.id, confirmedIds, settings.bracketSize);
     
-    // Automatically advance BYE matches if applicable!
-    // In knockout, if entryId2 is empty/BYE (meaning null or BYE), we can immediately resolve it.
-    // However, to keep it fully transparent, we let the user review and click "Auto-resolve BYEs" or resolve manually.
-    
+    const tiedCandidateIds = wildcardAnalysis.candidates
+      .filter(c => c.tieStatus)
+      .map(c => c.entryId);
+
+    const clusterObj = tiedCandidateIds.length >= 2 ? {
+      entryIds: tiedCandidateIds,
+      rankingMode: (wildcardAnalysis.isNormalizedStats ? 'normalized' : 'total') as 'total' | 'normalized'
+    } : undefined;
+
     onUpdateDivision({
       ...division,
       knockoutStage: {
         matches: bracketMatches,
         isLocked: false,
-        confirmedEntryIds: selectedSeeds,
+        confirmedEntryIds: confirmedIds,
+        slots: seedingAnalysis.slots,
+        wildcardCandidates: wildcardAnalysis.candidates,
+        wildcardManualRankings,
+        wildcardManualReason,
+        wildcardManualCluster: clusterObj
       },
       champions: null
     });
@@ -449,49 +531,129 @@ export default function DivisionKnockout({ division, onUpdateDivision, isAdmin =
               )}
             </div>
 
+            {/* Summary Metrics Header */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+              <div className="p-3 bg-slate-50 border border-slate-150 rounded-xl">
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Ukuran Bracket</span>
+                <span className="text-base font-black text-navy font-mono">{settings.bracketSize} Besar</span>
+              </div>
+              <div className="p-3 bg-emerald-50/60 border border-emerald-150 rounded-xl">
+                <span className="text-[10px] font-bold text-emerald-800 uppercase tracking-wider block">Lolos Langsung</span>
+                <span className="text-base font-black text-emerald-700 font-mono">{directQualifiers.length} Peserta</span>
+              </div>
+              <div className="p-3 bg-neon/15 border border-neon/30 rounded-xl">
+                <span className="text-[10px] font-bold text-navy uppercase tracking-wider block">Kebutuhan Wildcard</span>
+                <span className="text-base font-black text-navy font-mono">{wildcardAnalysis.wildcardsNeeded} Slot</span>
+              </div>
+              <div className="p-3 bg-amber-50/60 border border-amber-150 rounded-xl">
+                <span className="text-[10px] font-bold text-amber-800 uppercase tracking-wider block">Metode Wildcard</span>
+                <span className="text-xs font-extrabold text-amber-900 block truncate" title={wildcardAnalysis.isNormalizedStats ? 'Statistik Dinormalisasi (Main Beda)' : 'Statistik Total (Main Sama)'}>
+                  {wildcardAnalysis.isNormalizedStats ? '📊 Dinormalisasi' : '📈 Total Stat'}
+                </span>
+              </div>
+            </div>
+
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6" id="standings-rec-grid">
               {/* Direct Qualifiers */}
               <div className="p-4 rounded-xl bg-emerald-50/50 border border-emerald-150 space-y-3" id="direct-rec-panel">
-                <span className="text-xs font-bold text-emerald-800 uppercase tracking-wider block">
-                  Lolos Langsung ({direct.length} Peserta)
-                </span>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-emerald-800 uppercase tracking-wider block">
+                    Lolos Langsung ({directQualifiers.length} Peserta)
+                  </span>
+                  <span className="text-[10px] font-bold bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full">
+                    Grup Top {settings.playersQualifyingPerGroup}
+                  </span>
+                </div>
                 <p className="text-[11px] text-slate-450">
-                  Peserta peringkat {settings.playersQualifyingPerGroup} teratas dari setiap grup stage.
+                  Peserta peringkat 1 s/d {settings.playersQualifyingPerGroup} dari tiap grup yang berhak lolos langsung ke babak gugur.
                 </p>
 
                 <div className="space-y-1.5" id="direct-list">
-                  {direct.length === 0 ? (
+                  {directQualifiers.length === 0 ? (
                     <span className="text-xs text-slate-400 italic">Belum ada pertandingan grup selesai.</span>
                   ) : (
-                    direct.map((id, idx) => (
-                      <div key={id} className="p-2 bg-white border border-emerald-150 rounded-lg text-xs font-semibold text-slate-700 flex items-center gap-2">
-                        <span className="text-emerald-600 font-bold font-mono">#{idx+1}</span>
-                        {getEntryLabel(id)}
+                    directQualifiers.map((q, idx) => (
+                      <div key={q.entryId} className="p-2 bg-white border border-emerald-150 rounded-lg text-xs font-semibold text-slate-700 flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2 truncate">
+                          <span className="text-emerald-600 font-bold font-mono">#{idx+1}</span>
+                          <span className="truncate">{getEntryLabel(q.entryId)}</span>
+                        </div>
+                        <span className="text-[10px] font-bold font-mono px-2 py-0.5 bg-emerald-50 text-emerald-700 rounded border border-emerald-200 shrink-0">
+                          {q.sourceLabel}
+                        </span>
                       </div>
                     ))
                   )}
                 </div>
               </div>
 
-              {/* Wildcard Qualifiers */}
+              {/* Wildcard Qualifiers & Ranking Analysis */}
               <div className="p-4 rounded-xl bg-neon/10 border border-neon/30 space-y-3" id="wildcard-rec-panel">
-                <span className="text-xs font-bold text-navy uppercase tracking-wider block">
-                  Rekomendasi Wildcard ({wildcards.length} Peserta)
-                </span>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-bold text-navy uppercase tracking-wider block">
+                    Peringkat Wildcard ({wildcardAnalysis.selectedWildcardEntryIds.length} Lolos dari {wildcardAnalysis.candidates.length} Kandidat)
+                  </span>
+                  {wildcardAnalysis.hasTiedCluster && isAdmin && (
+                    <button
+                      type="button"
+                      onClick={() => setShowWildcardTieModal(true)}
+                      className="px-2.5 py-1 bg-amber-500 hover:bg-amber-600 text-white text-[10px] font-extrabold rounded-lg transition flex items-center gap-1 shadow-xs"
+                    >
+                      <Edit3 className="h-3 w-3" /> Keputusan Admin
+                    </button>
+                  )}
+                </div>
                 <p className="text-[11px] text-slate-450">
-                  Runner-up atau peringkat berikutnya lintas grup yang berkinerja terbaik untuk mencukupi kuota {settings.bracketSize} besar.
+                  {wildcardAnalysis.isNormalizedStats
+                    ? 'Diurutkan berdasar Rasio Kemenangan (%), Rata-rata PF, & Rata-rata Selisih Poin karena jumlah main antar-grup berbeda.'
+                    : 'Diurutkan berdasar Menang Total, Selisih Poin Total, & PF Total.'}
                 </p>
 
-                <div className="space-y-1.5" id="wildcards-list">
-                  {wildcards.length === 0 ? (
-                    <span className="text-xs text-slate-400 italic">Tidak ada slot wildcard yang dibutuhkan.</span>
+                <div className="space-y-1.5 max-h-64 overflow-y-auto pr-1" id="wildcards-list">
+                  {wildcardAnalysis.candidates.length === 0 ? (
+                    <span className="text-xs text-slate-400 italic">Tidak ada kandidat wildcard atau slot wildcard tidak dibutuhkan.</span>
                   ) : (
-                    wildcards.map((id, idx) => (
-                      <div key={id} className="p-2 bg-white border border-neon/30 rounded-lg text-xs font-semibold text-slate-700 flex items-center gap-2">
-                        <span className="text-navy font-bold font-mono">WC-{idx+1}</span>
-                        {getEntryLabel(id)}
-                      </div>
-                    ))
+                    wildcardAnalysis.candidates.map((c) => {
+                      const isSelected = wildcardAnalysis.selectedWildcardEntryIds.includes(c.entryId);
+                      return (
+                        <div
+                          key={c.entryId}
+                          className={`p-2 bg-white border rounded-lg text-xs font-semibold flex items-center justify-between gap-2 transition ${
+                            isSelected
+                              ? 'border-navy/40 shadow-xs'
+                              : 'border-slate-200 opacity-60'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2 truncate">
+                            <span className={`font-bold font-mono text-[10px] px-1.5 py-0.5 rounded ${
+                              isSelected ? 'bg-navy text-neon' : 'bg-slate-100 text-slate-500'
+                            }`}>
+                              WC#{c.wildcardRank}
+                            </span>
+                            <span className="truncate">{getEntryLabel(c.entryId)}</span>
+                          </div>
+                          
+                          <div className="flex items-center gap-1.5 text-[10px] font-mono shrink-0">
+                            <span className="text-slate-500">{c.groupName} (R{c.groupRank})</span>
+                            <span className="text-slate-300">•</span>
+                            {wildcardAnalysis.isNormalizedStats ? (
+                              <span className="font-bold text-navy">{(c.winPercentage * 100).toFixed(0)}% W</span>
+                            ) : (
+                              <span className="font-bold text-navy">{c.won}W ({c.pointDifference > 0 ? `+${c.pointDifference}` : c.pointDifference})</span>
+                            )}
+                            {isSelected ? (
+                              <span className="text-[9px] font-black text-emerald-600 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
+                                LOLOS
+                              </span>
+                            ) : (
+                              <span className="text-[9px] font-bold text-slate-400 bg-slate-50 px-1 py-0.5 rounded">
+                                GUGUR
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })
                   )}
                 </div>
               </div>
@@ -501,36 +663,66 @@ export default function DivisionKnockout({ division, onUpdateDivision, isAdmin =
           {/* Seed configuration inputs before Generating */}
           {isAdmin && selectedSeeds.length > 0 && (
             <div className="bg-white rounded-2xl border border-slate-150 p-6 card-shadow space-y-6" id="seeding-setup-panel">
-              <div className="pb-3 border-b border-slate-150">
-                <h4 className="font-extrabold text-navy text-sm">Sesuaikan Seed/Penempatan Slot Bracket</h4>
-                <p className="text-[11px] text-slate-400 mt-0.5">
-                  Tentukan posisi awal seed 1 hingga {settings.bracketSize} sebelum bracket dibentuk secara paten.
-                </p>
+              <div className="pb-3 border-b border-slate-150 flex flex-col md:flex-row md:items-center justify-between gap-2">
+                <div>
+                  <h4 className="font-extrabold text-navy text-sm">Sesuaikan Seed & Slot Bracket Seeding</h4>
+                  <p className="text-[11px] text-slate-400 mt-0.5">
+                    Seeding otomatis memisahkan Juara Grup, Runner-Up, dan Wildcard, serta menghindari bentrok se-grup di babak pertama.
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] font-bold text-slate-500 bg-slate-100 px-2.5 py-1 rounded-lg">
+                    Seeding PAINDO-008 Active
+                  </span>
+                </div>
               </div>
 
+              {seedingAnalysis.groupCollisionWarning && (
+                <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800 flex items-center gap-2">
+                  <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0" />
+                  <span>{seedingAnalysis.groupCollisionWarning}</span>
+                </div>
+              )}
+
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4" id="seeding-dropdowns-grid">
-                {Array(settings.bracketSize).fill(null).map((_, index) => (
-                  <div key={index} className="space-y-1" id={`seed-select-container-${index}`}>
-                    <label className="text-xs font-bold text-slate-500 font-mono block">Slot Seed {index + 1}</label>
-                    <select
-                      value={selectedSeeds[index] || ''}
-                      onChange={(e) => handleSeedChange(index, e.target.value)}
-                      className="w-full px-3 py-2 rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-navy/15 text-xs text-slate-700 font-semibold bg-white"
-                      id={`seed-select-${index}`}
-                    >
-                      <option value="">-- Pilih Peserta --</option>
-                      <option value="BYE">BYE (Lolos Langsung)</option>
-                      {entries.map(ent => {
-                        const label = `${ent.name1}${ent.name2 ? ` / ${ent.name2}` : ''}`;
-                        return (
-                          <option key={ent.id} value={ent.id}>
-                            {label}
-                          </option>
-                        );
-                      })}
-                    </select>
-                  </div>
-                ))}
+                {Array(settings.bracketSize).fill(null).map((_, index) => {
+                  const slotMeta = seedingAnalysis.slots[index];
+                  return (
+                    <div key={index} className="space-y-1 p-3 bg-slate-50/70 border border-slate-150 rounded-xl" id={`seed-select-container-${index}`}>
+                      <div className="flex items-center justify-between">
+                        <label className="text-xs font-bold text-navy font-mono block">Slot Seed #{index + 1}</label>
+                        {slotMeta && (
+                          <span className={`text-[9px] font-extrabold px-1.5 py-0.5 rounded font-mono ${
+                            slotMeta.isWildcard 
+                              ? 'bg-amber-100 text-amber-800' 
+                              : slotMeta.isBye 
+                              ? 'bg-slate-200 text-slate-600' 
+                              : 'bg-emerald-100 text-emerald-800'
+                          }`}>
+                            {slotMeta.sourceLabel}
+                          </span>
+                        )}
+                      </div>
+                      <select
+                        value={selectedSeeds[index] || ''}
+                        onChange={(e) => handleSeedChange(index, e.target.value)}
+                        className="w-full px-3 py-2 rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-navy/15 text-xs text-slate-700 font-semibold bg-white"
+                        id={`seed-select-${index}`}
+                      >
+                        <option value="">-- Pilih Peserta --</option>
+                        <option value="BYE">BYE (Lolos Langsung)</option>
+                        {entries.map(ent => {
+                          const label = `${ent.name1}${ent.name2 ? ` / ${ent.name2}` : ''}`;
+                          return (
+                            <option key={ent.id} value={ent.id}>
+                              {label}
+                            </option>
+                          );
+                        })}
+                      </select>
+                    </div>
+                  );
+                })}
               </div>
 
               <div className="flex justify-end pt-2">
@@ -959,6 +1151,127 @@ export default function DivisionKnockout({ division, onUpdateDivision, isAdmin =
               </div>
 
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* WILDCARD TIE DECISION MODAL */}
+      {showWildcardTieModal && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fade-in" id="wildcard-tie-modal">
+          <div className="bg-white rounded-2xl max-w-lg w-full border border-slate-150 p-6 shadow-2xl space-y-5 animate-scale-up" id="wildcard-tie-card">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-150">
+              <h3 className="text-base font-extrabold text-navy flex items-center gap-2">
+                <ShieldAlert className="h-5 w-5 text-amber-500" />
+                Keputusan Admin: Seri Wildcard
+              </h3>
+              <button
+                type="button"
+                onClick={() => setShowWildcardTieModal(false)}
+                className="text-slate-400 hover:text-slate-600 p-1 rounded-lg"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <p className="text-xs text-slate-600 leading-relaxed">
+              Terdapat kesamaan persis pada seluruh indikator performa untuk kandidat wildcard pada batas kelolosan. Tentukan urutan manual kandidat dan tuliskan alasan keputusannya.
+            </p>
+
+            <div className="space-y-3 max-h-60 overflow-y-auto pr-1">
+              {wildcardAnalysis.candidates.map((c) => (
+                <div key={c.entryId} className="p-3 bg-slate-50 border border-slate-150 rounded-xl flex items-center justify-between gap-3">
+                  <div className="min-w-0 flex-1">
+                    <span className="font-extrabold text-navy text-xs block truncate">{getEntryLabel(c.entryId)}</span>
+                    <span className="text-[10px] text-slate-400 block font-mono">
+                      Grup {c.groupName} (R{c.groupRank}) • Win: {(c.winPercentage * 100).toFixed(0)}% • PF: {c.pointsFor} • Diff: {c.pointDifference}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-2 shrink-0">
+                    <label className="text-[10px] font-bold text-slate-500">Urutan:</label>
+                    <input
+                      type="number"
+                      min="1"
+                      max={wildcardAnalysis.candidates.length}
+                      value={wildcardManualRankings[c.entryId] ?? c.wildcardRank}
+                      onChange={(e) => {
+                        const val = parseInt(e.target.value) || 1;
+                        setWildcardManualRankings(prev => ({
+                          ...prev,
+                          [c.entryId]: val
+                        }));
+                      }}
+                      className="w-14 px-2 py-1 text-center font-bold text-xs border border-slate-250 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-navy/15"
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-xs font-extrabold text-navy block">Alasan Keputusan Admin (Wajib)</label>
+              <textarea
+                value={wildcardManualReason}
+                onChange={(e) => setWildcardManualReason(e.target.value)}
+                placeholder="Contoh: Hasil undian/tos koin yang disaksikan oleh panitia dan manajer tim."
+                rows={2}
+                className="w-full p-2.5 text-xs border border-slate-200 rounded-xl bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-navy/15 font-sans"
+              />
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-150">
+              <button
+                type="button"
+                onClick={() => setShowWildcardTieModal(false)}
+                className="px-4 py-2 text-xs font-semibold text-slate-500 hover:text-slate-700"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (!wildcardManualReason.trim()) {
+                    setShowAlert({
+                      title: 'Alasan Wajib Diisi',
+                      message: 'Harap masukkan alasan keputusan manual admin untuk transparansi turnamen.'
+                    });
+                    return;
+                  }
+                  setShowWildcardTieModal(false);
+
+                  const tiedCandidateIds = wildcardAnalysis.candidates
+                    .filter(c => c.tieStatus)
+                    .map(c => c.entryId);
+
+                  const clusterObj = tiedCandidateIds.length >= 2 ? {
+                    entryIds: tiedCandidateIds,
+                    rankingMode: (wildcardAnalysis.isNormalizedStats ? 'normalized' : 'total') as 'total' | 'normalized'
+                  } : undefined;
+
+                  const newKnockoutStage: KnockoutStage = knockoutStage ? {
+                    ...knockoutStage,
+                    wildcardManualRankings,
+                    wildcardManualReason,
+                    wildcardManualCluster: clusterObj
+                  } : {
+                    matches: [],
+                    isLocked: false,
+                    confirmedEntryIds: [],
+                    wildcardManualRankings,
+                    wildcardManualReason,
+                    wildcardManualCluster: clusterObj
+                  };
+
+                  onUpdateDivision({
+                    ...division,
+                    knockoutStage: newKnockoutStage
+                  });
+                }}
+                className="px-5 py-2 bg-navy hover:bg-navy-light text-neon text-xs font-extrabold rounded-xl transition card-shadow"
+              >
+                Simpan Keputusan Wildcard
+              </button>
+            </div>
           </div>
         </div>
       )}

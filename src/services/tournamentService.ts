@@ -1,5 +1,5 @@
 import { supabase, isSupabaseConfigured } from '../lib/supabaseClient';
-import { Tournament, Division, TournamentEvent, AgeGroup, Entry, Group, Match, Champions, KnockoutStage, ServiceResult } from '../types';
+import { Tournament, Division, TournamentEvent, AgeGroup, Entry, Group, Match, Champions, KnockoutStage, KnockoutSlot, ServiceResult } from '../types';
 import { saveDivisionsToSupabase, loadDivisionsForTournament } from './divisionService';
 import { saveEntriesToSupabase, loadEntriesForTournament } from './entryService';
 import { saveGroupsAndMembersToSupabase, loadGroupsForTournament } from './groupService';
@@ -538,15 +538,81 @@ export async function loadTournamentFromSupabase(tournamentId: string): Promise<
           matchNum: m.match_no
         }));
 
-        const confirmedIds = (slotData || [])
+        // Validate cloud wildcard_manual_rankings & cluster
+        let validatedWildcardManualRankings: Record<string, number> | undefined = undefined;
+        let validatedWildcardManualCluster: { entryIds: string[]; rankingMode: 'total' | 'normalized' } | undefined = undefined;
+
+        if (
+          div.wildcard_manual_rankings &&
+          typeof div.wildcard_manual_rankings === 'object' &&
+          !Array.isArray(div.wildcard_manual_rankings)
+        ) {
+          const keys = Object.keys(div.wildcard_manual_rankings);
+          const seenRanks = new Set<number>();
+          let isValid = keys.length > 0;
+          for (const k of keys) {
+            const r = div.wildcard_manual_rankings[k];
+            if (!Number.isInteger(r) || r <= 0 || seenRanks.has(r)) {
+              isValid = false;
+              break;
+            }
+            seenRanks.add(r);
+          }
+          if (isValid) {
+            validatedWildcardManualRankings = div.wildcard_manual_rankings;
+          } else {
+            console.warn(`[Integrity Warning] Invalid wildcard_manual_rankings ignored for division ${div.id}:`, div.wildcard_manual_rankings);
+          }
+        }
+
+        if (div.wildcard_manual_cluster && typeof div.wildcard_manual_cluster === 'object') {
+          const { entryIds, rankingMode } = div.wildcard_manual_cluster;
+          if (Array.isArray(entryIds) && (rankingMode === 'total' || rankingMode === 'normalized')) {
+            validatedWildcardManualCluster = { entryIds, rankingMode };
+          } else {
+            console.warn(`[Integrity Warning] Invalid wildcard_manual_cluster ignored for division ${div.id}:`, div.wildcard_manual_cluster);
+          }
+        }
+
+        const divSlots = (slotData || [])
           .filter((s: any) => s.division_id === div.id)
-          .sort((a: any, b: any) => a.seed_no - b.seed_no)
-          .map((s: any) => s.entry_id || 'BYE');
+          .sort((a: any, b: any) => a.seed_no - b.seed_no);
+
+        const confirmedIds = divSlots.map((s: any) => s.entry_id || 'BYE');
+
+        const reconstructedSlots: KnockoutSlot[] = divSlots.map((s: any) => {
+          const qualType = s.qualification_type || (
+            (!s.entry_id || s.entry_id === 'BYE' || s.is_bye) ? 'bye' : (s.is_wildcard ? 'wildcard' : 'group')
+          );
+
+          let groupName: string | undefined = undefined;
+          if (s.source_group_id) {
+            const grp = divGroups.find(g => g.id === s.source_group_id);
+            if (grp) groupName = grp.name;
+          }
+
+          return {
+            seedNo: s.seed_no,
+            entryId: s.entry_id || null,
+            sourceLabel: s.source_label || `Seed ${s.seed_no}`,
+            isWildcard: qualType === 'wildcard' || !!s.is_wildcard,
+            isBye: qualType === 'bye' || !s.entry_id || s.entry_id === 'BYE' || !!s.is_bye,
+            sourceGroupId: qualType === 'bye' ? undefined : (s.source_group_id || undefined),
+            sourceGroupName: groupName,
+            sourceGroupRank: Number.isInteger(s.source_group_rank) ? s.source_group_rank : undefined,
+            qualificationType: qualType as 'group' | 'wildcard' | 'bye',
+            wildcardRank: Number.isInteger(s.wildcard_rank) ? s.wildcard_rank : undefined
+          };
+        });
 
         knockoutStage = {
           matches: sortedKoMatches,
           isLocked: sortedKoMatches.some(m => m.status === 'selesai'),
-          confirmedEntryIds: confirmedIds
+          confirmedEntryIds: confirmedIds,
+          slots: reconstructedSlots,
+          wildcardManualRankings: validatedWildcardManualRankings,
+          wildcardManualReason: div.wildcard_manual_reason?.trim() || undefined,
+          wildcardManualCluster: validatedWildcardManualCluster
         };
       }
 
