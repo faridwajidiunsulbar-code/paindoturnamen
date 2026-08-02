@@ -113,15 +113,29 @@ export type ServiceResult<T> =
   | {
       success: true;
       data: T;
+      isConflict?: false;
+      partialSave?: false;
     }
   | {
       success: false;
+      isConflict?: boolean;
+      partialSave?: boolean;
       error: {
         code?: string;
         message: string;
         details?: string;
         module?: string;
         operation?: string;
+      };
+      conflictDetails?: {
+        localRevision: number;
+        cloudRevision: number;
+        localLoadedAt?: string;
+        cloudUpdatedAt?: string;
+      };
+      partialDetails?: {
+        reservedRevision?: number;
+        cloudSaveStatus?: 'failed';
       };
     };
 

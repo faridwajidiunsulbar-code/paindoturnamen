@@ -343,43 +343,65 @@ export default function App() {
 
     setIsSyncing('syncing');
     const result = await saveTournamentToSupabase(tournament);
-    if (result.success) {
-      setIsSyncing('synced');
-      setHasUnsavedChanges(false);
-      const resData = result.data as any;
+
+    // TAHAP C - Urutan pemeriksaan wajib:
+    // 1. isConflict
+    if (result.isConflict) {
+      setAutoSyncEnabled(false);
+      const details = result.conflictDetails;
+      setConflictData({
+        localRevision: details?.localRevision ?? tournament.cloudRevision ?? 1,
+        cloudRevision: details?.cloudRevision ?? ((tournament.cloudRevision ?? 1) + 1),
+        localUpdatedAt: details?.localLoadedAt || tournament.updatedAt || tournament.cloudUpdatedAt,
+        cloudUpdatedAt: details?.cloudUpdatedAt
+      });
+      setIsSyncing('error');
+      setHasUnsavedChanges(true);
+      console.info('[Hotfix PAINDO-007E1] Handler branch executed: CONFLICT TRIGGERED (Manual Save)', {
+        localRevision: details?.localRevision ?? tournament.cloudRevision,
+        cloudRevision: details?.cloudRevision,
+        modalState: 'visible',
+        childServiceInvoked: false
+      });
+      showToast('Konflik penyimpanan terdeteksi! Data turnamen di Cloud telah diperbarui dari tab/perangkat lain.', 'error');
+      return;
+    }
+
+    // 2. partialSave
+    if (result.partialSave) {
+      const partialDetails = result.partialDetails;
       updateTournamentState({
         ...tournament,
-        cloudRevision: resData.cloudRevision,
-        cloudUpdatedAt: resData.cloudUpdatedAt,
-        cloudSaveStatus: resData.cloudSaveStatus,
-        cloudSyncedAt: resData.savedAt
-      }, true);
-      refreshOnlineTournamentsList();
-      showToast('Berhasil! Jadwal pertandingan, skor, & klasemen DISIMPAN ke Database Cloud.', 'success');
-    } else {
+        cloudRevision: partialDetails?.reservedRevision ?? tournament.cloudRevision,
+        cloudSaveStatus: 'failed'
+      }, false);
       setIsSyncing('error');
-      if ((result as any).isConflict) {
-        setAutoSyncEnabled(false);
-        setConflictData({
-          localRevision: (result as any).conflictDetails?.localRevision || tournament.cloudRevision,
-          cloudRevision: (result as any).conflictDetails?.cloudRevision,
-          localUpdatedAt: (result as any).conflictDetails?.localLoadedAt || tournament.updatedAt || tournament.cloudUpdatedAt,
-          cloudUpdatedAt: (result as any).conflictDetails?.cloudUpdatedAt
-        });
-      } else if ((result as any).partialSave) {
-        const partialDetails = (result as any).partialDetails;
-        updateTournamentState({
-          ...tournament,
-          cloudRevision: partialDetails?.reservedRevision ?? tournament.cloudRevision,
-          cloudSaveStatus: 'failed'
-        }, false);
-        const lastErr = ('error' in result && result.error.message) ? result.error.message : 'Penyimpanan sebagian gagal.';
-        showToast(lastErr, 'error');
-      } else {
-        const lastErr = ('error' in result && result.error.message) ? result.error.message : 'Gagal menyimpan ke database cloud.';
-        showToast(`Gagal menyimpan: ${lastErr}`, 'error');
-      }
+      const lastErr = (result as any).error?.message || 'Penyimpanan sebagian gagal.';
+      showToast(lastErr, 'error');
+      return;
     }
+
+    // 3. !success
+    if (!result.success) {
+      setIsSyncing('error');
+      const lastErr = (result as any).error?.message || 'Gagal menyimpan ke database cloud.';
+      showToast(`Gagal menyimpan: ${lastErr}`, 'error');
+      return;
+    }
+
+    // 4. success
+    setIsSyncing('synced');
+    setHasUnsavedChanges(false);
+    const resData = result.data;
+    updateTournamentState({
+      ...tournament,
+      cloudRevision: resData.cloudRevision,
+      cloudUpdatedAt: resData.cloudUpdatedAt,
+      cloudSaveStatus: resData.cloudSaveStatus,
+      cloudSyncedAt: resData.savedAt
+    }, true);
+    refreshOnlineTournamentsList();
+    showToast('Berhasil! Jadwal pertandingan, skor, & klasemen DISIMPAN ke Database Cloud.', 'success');
   };
 
   // Manual refresh from Cloud for users / spectators
@@ -442,43 +464,62 @@ export default function App() {
       const performSync = async () => {
         setIsSyncing('syncing');
         const result = await saveTournamentToSupabase(tournament);
-        if (result.success) {
-          setIsSyncing('synced');
-          setHasUnsavedChanges(false);
-          const resData = result.data as any;
+
+        if (result.isConflict) {
+          setAutoSyncEnabled(false);
+          const details = result.conflictDetails;
+          setConflictData({
+            localRevision: details?.localRevision ?? tournament.cloudRevision ?? 1,
+            cloudRevision: details?.cloudRevision ?? ((tournament.cloudRevision ?? 1) + 1),
+            localUpdatedAt: details?.localLoadedAt || tournament.updatedAt || tournament.cloudUpdatedAt,
+            cloudUpdatedAt: details?.cloudUpdatedAt
+          });
+          setIsSyncing('error');
+          setHasUnsavedChanges(true);
+          console.info('[Hotfix PAINDO-007E1] Handler branch executed: CONFLICT TRIGGERED (Auto-Sync)', {
+            localRevision: details?.localRevision ?? tournament.cloudRevision,
+            cloudRevision: details?.cloudRevision,
+            modalState: 'visible',
+            childServiceInvoked: false
+          });
+          showToast('Auto-Sync dihentikan: Data turnamen di Cloud telah diperbarui dari tab/perangkat lain.', 'error');
+          return;
+        }
+
+        if (result.partialSave) {
+          setAutoSyncEnabled(false);
+          const partialDetails = result.partialDetails;
           updateTournamentState({
             ...tournament,
-            cloudRevision: resData.cloudRevision,
-            cloudUpdatedAt: resData.cloudUpdatedAt,
-            cloudSaveStatus: resData.cloudSaveStatus,
-            cloudSyncedAt: resData.savedAt
-          }, true);
-          setShowSyncSuccessMsg(true);
-          showToast('Data skor & susunan grup otomatis DIPUBLIKASI ke Cloud Web!', 'success');
-          const timer = setTimeout(() => setShowSyncSuccessMsg(false), 2000);
-          refreshOnlineTournamentsList();
-          return () => clearTimeout(timer);
-        } else {
+            cloudRevision: partialDetails?.reservedRevision ?? tournament.cloudRevision,
+            cloudSaveStatus: 'failed'
+          }, false);
           setIsSyncing('error');
-          if ((result as any).isConflict) {
-            setAutoSyncEnabled(false);
-            setConflictData({
-              localRevision: (result as any).conflictDetails?.localRevision || tournament.cloudRevision,
-              cloudRevision: (result as any).conflictDetails?.cloudRevision,
-              localUpdatedAt: (result as any).conflictDetails?.localLoadedAt || tournament.updatedAt || tournament.cloudUpdatedAt,
-              cloudUpdatedAt: (result as any).conflictDetails?.cloudUpdatedAt
-            });
-          } else if ((result as any).partialSave) {
-            const partialDetails = (result as any).partialDetails;
-            setAutoSyncEnabled(false);
-            updateTournamentState({
-              ...tournament,
-              cloudRevision: partialDetails?.reservedRevision ?? tournament.cloudRevision,
-              cloudSaveStatus: 'failed'
-            }, false);
-            showToast('Auto-Sync dihentikan: Penyimpanan sebagian gagal.', 'error');
-          }
+          showToast('Auto-Sync dihentikan: Penyimpanan sebagian gagal.', 'error');
+          return;
         }
+
+        if (!result.success) {
+          setIsSyncing('error');
+          const lastErr = (result as any).error?.message || 'Gagal menyimpan ke database cloud.';
+          showToast(`Auto-Sync gagal: ${lastErr}`, 'error');
+          return;
+        }
+
+        setIsSyncing('synced');
+        setHasUnsavedChanges(false);
+        const resData = result.data;
+        updateTournamentState({
+          ...tournament,
+          cloudRevision: resData.cloudRevision,
+          cloudUpdatedAt: resData.cloudUpdatedAt,
+          cloudSaveStatus: resData.cloudSaveStatus,
+          cloudSyncedAt: resData.savedAt
+        }, true);
+        setShowSyncSuccessMsg(true);
+        showToast('Data skor & susunan grup otomatis DIPUBLIKASI ke Cloud Web!', 'success');
+        const timer = setTimeout(() => setShowSyncSuccessMsg(false), 2000);
+        refreshOnlineTournamentsList();
       };
       
       const timeoutId = setTimeout(performSync, 2000);
@@ -872,17 +913,27 @@ export default function App() {
                     <RefreshCw className="h-3 w-3 animate-spin text-neon" /> Menyimpan data...
                   </span>
                 )}
-                {isSyncing === 'synced' && !hasUnsavedChanges && (
+                {isSyncing === 'synced' && !hasUnsavedChanges && !conflictData && tournament.cloudSaveStatus !== 'failed' && (
                   <span className="flex items-center gap-1 text-emerald-400 font-bold">
                     <CheckCircle2 className="h-3.5 w-3.5" /> Database Sinkron
                   </span>
                 )}
-                {hasUnsavedChanges && (
+                {conflictData && (
+                  <span className="flex items-center gap-1 text-amber-400 font-bold">
+                    <AlertCircle className="h-3.5 w-3.5" /> Konflik — Belum Tersimpan
+                  </span>
+                )}
+                {tournament.cloudSaveStatus === 'failed' && !conflictData && (
+                  <span className="flex items-center gap-1 text-rose-400 font-bold">
+                    <AlertCircle className="h-3.5 w-3.5" /> Gagal — Perlu Pemulihan
+                  </span>
+                )}
+                {hasUnsavedChanges && !conflictData && (
                   <span className="flex items-center gap-1 text-amber-400 font-bold animate-pulse">
                     <AlertCircle className="h-3.5 w-3.5" /> Ada Perubahan Belum Disimpan
                   </span>
                 )}
-                {isSyncing === 'error' && (
+                {isSyncing === 'error' && !conflictData && tournament.cloudSaveStatus !== 'failed' && !hasUnsavedChanges && (
                   <span className="flex items-center gap-1 text-rose-400 font-bold">
                     <AlertCircle className="h-3.5 w-3.5" /> Gagal Sinkronisasi
                   </span>

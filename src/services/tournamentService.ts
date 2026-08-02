@@ -57,7 +57,12 @@ export async function getCurrentProfile(): Promise<UserProfile | null> {
  */
 
 // Save/Sync a complete tournament tree to the relational database using domain services
-export async function saveTournamentToSupabase(tournament: Tournament): Promise<ServiceResult<boolean>> {
+export async function saveTournamentToSupabase(tournament: Tournament): Promise<ServiceResult<{
+  savedAt: string;
+  cloudRevision: number;
+  cloudUpdatedAt: string;
+  cloudSaveStatus: 'complete';
+}>> {
   if (!isSupabaseConfigured) {
     return {
       success: false,
@@ -106,7 +111,10 @@ export async function saveTournamentToSupabase(tournament: Tournament): Promise<
     }
 
     // 1. Validasi Expected Revision
-    const expectedRevision = typeof tournament.cloudRevision === 'number' ? tournament.cloudRevision : 1;
+    const rawRev = tournament.cloudRevision;
+    const expectedRevision = typeof rawRev === 'number'
+      ? rawRev
+      : (rawRev ? parseInt(String(rawRev), 10) : 1);
 
     if (!Number.isInteger(expectedRevision) || expectedRevision < 1) {
       return {
@@ -131,18 +139,15 @@ export async function saveTournamentToSupabase(tournament: Tournament): Promise<
 
     if (existingCloudTourney) {
       // Existing tournament in Cloud -> Perform Atomic Conditional Update Reservation
-      const cloudRev = typeof existingCloudTourney.revision === 'number'
-        ? existingCloudTourney.revision
-        : (existingCloudTourney.revision ? parseInt(existingCloudTourney.revision, 10) : 1);
-
-      const targetRevision = expectedRevision || cloudRev;
+      // CRITICAL: expectedRevision comes strictly from tournament.cloudRevision
+      // DO NOT fallback to cloud revision or overwrite expectedRevision!
 
       const reservePayload: any = {
         name: tournament.name,
         date: tournament.date,
         location: tournament.location || '',
         status: 'active',
-        revision: targetRevision + 1,
+        revision: expectedRevision + 1,
         save_status: 'saving'
       };
       if (user?.id) {
@@ -153,7 +158,7 @@ export async function saveTournamentToSupabase(tournament: Tournament): Promise<
         .from('tournaments')
         .update(reservePayload)
         .eq('id', tournament.id)
-        .eq('revision', targetRevision)
+        .eq('revision', expectedRevision)
         .select('revision, updated_at, save_status');
 
       if (reservationError) {
@@ -168,6 +173,14 @@ export async function saveTournamentToSupabase(tournament: Tournament): Promise<
         };
       }
 
+      // Instrumentation logging for PAINDO-007E1 verification
+      console.info('[Hotfix PAINDO-007E1] Reservation result:', {
+        tournamentId: tournament.id,
+        expectedRevision,
+        reservedDataLength: reservedData ? reservedData.length : 0,
+        isConflict: !reservedData || reservedData.length === 0
+      });
+
       // Zero rows returned -> Concurrency Conflict!
       if (!reservedData || reservedData.length === 0) {
         const { data: latestCloud } = await supabase
@@ -176,9 +189,12 @@ export async function saveTournamentToSupabase(tournament: Tournament): Promise<
           .eq('id', tournament.id)
           .maybeSingle();
 
+        const latestCloudRev = latestCloud?.revision ? Number(latestCloud.revision) : expectedRevision + 1;
+
         return {
           success: false,
           isConflict: true,
+          partialSave: false,
           error: {
             code: 'CONCURRENCY_CONFLICT',
             module: 'tournament',
@@ -186,12 +202,12 @@ export async function saveTournamentToSupabase(tournament: Tournament): Promise<
             message: 'Data turnamen di Cloud telah diperbarui dari tab atau perangkat lain. Penyimpanan dibatalkan agar data terbaru tidak tertimpa.'
           },
           conflictDetails: {
-            localRevision: targetRevision,
-            cloudRevision: latestCloud?.revision ? Number(latestCloud.revision) : targetRevision + 1,
-            localLoadedAt: tournament.cloudUpdatedAt,
+            localRevision: expectedRevision,
+            cloudRevision: latestCloudRev,
+            localLoadedAt: tournament.cloudUpdatedAt || tournament.updatedAt,
             cloudUpdatedAt: latestCloud?.updated_at
           }
-        } as any;
+        };
       }
 
       if (reservedData.length > 1) {
