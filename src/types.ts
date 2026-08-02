@@ -100,6 +100,25 @@ export interface WildcardCandidate {
   manualOverrideRank?: number;
 }
 
+export type BracketArrangementMode = 'automatic' | 'group_cross' | 'manual';
+export type BracketSourceType = 'group_rank' | 'wildcard_rank' | 'bye' | 'manual';
+
+export interface GroupCrossPairing {
+  id: string;
+  groupOneId: string;
+  groupTwoId: string;
+  order: number;
+}
+
+export interface ManualSlotAssignment {
+  seedNo: number;
+  sourceType: BracketSourceType;
+  sourceGroupId?: string;
+  sourceGroupRank?: number;
+  wildcardRank?: number;
+  manualEntryId?: string | null;
+}
+
 export interface KnockoutStage {
   matches: Match[];
   isLocked: boolean; // if true, bracket is locked and we can play; if false, we can rearrange seeds
@@ -113,6 +132,14 @@ export interface KnockoutStage {
     rankingMode: 'total' | 'normalized';
   };
   invalidatedReason?: string;
+
+  bracketArrangementMode?: BracketArrangementMode;
+  groupCrossPairings?: GroupCrossPairing[];
+  manualSlotAssignments?: Record<string, ManualSlotAssignment>;
+  manualArrangementReason?: string;
+  arrangementConfirmedAt?: string;
+  arrangementLocked?: boolean;
+  arrangementInvalidatedReason?: string;
 }
 
 export interface Champions {

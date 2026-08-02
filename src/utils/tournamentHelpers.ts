@@ -4,6 +4,7 @@
  */
 
 import { Match, Group, Entry, GroupStandingRow, DivisionSettings, KnockoutSlot, WildcardCandidate } from '../types';
+import { getSeedPattern } from './bracketArrangementHelpers';
 
 /**
  * Generate all round robin matches within a group (all-play-all exactly once).
@@ -700,17 +701,7 @@ export function buildSeedingAndSlots(
   const finalParticipants = tieredEntries.slice(0, bracketSize);
 
   // Standard Seed Positions mapping for Bracket Sizes (4, 8, 16, 32)
-  let seedPattern: number[] = [];
-
-  if (bracketSize === 4) {
-    seedPattern = [1, 4, 2, 3];
-  } else if (bracketSize === 8) {
-    seedPattern = [1, 8, 4, 5, 2, 7, 3, 6];
-  } else if (bracketSize === 16) {
-    seedPattern = [1, 16, 8, 9, 4, 13, 5, 12, 2, 15, 7, 10, 3, 14, 6, 11];
-  } else {
-    seedPattern = Array.from({ length: bracketSize }, (_, i) => i + 1);
-  }
+  const seedPattern = getSeedPattern(bracketSize);
 
   const slotList: KnockoutSlot[] = Array(bracketSize).fill(null);
 
@@ -1012,6 +1003,105 @@ export function generateKnockoutBracket(
       entryId1: null, entryId2: null, score1: null, score2: null, status: 'belum_dimainkan',
     });
   } 
+  else if (bracketSize === 32) {
+    // Round of 32 (Matches 1 to 16)
+    for (let i = 0; i < 16; i++) {
+      const p1Index = 2 * i;
+      const p2Index = 2 * i + 1;
+      const nextMatch = 17 + Math.floor(i / 2);
+      const nextSlot = (i % 2 === 0) ? 'player1' : 'player2';
+
+      matches.push({
+        id: `ko-${divisionId}-${i + 1}`,
+        divisionId,
+        roundName: 'Babak 32 Besar',
+        type: 'KNOCKOUT',
+        matchNum: i + 1,
+        nextMatchNum: nextMatch,
+        nextMatchSlot: nextSlot as 'player1' | 'player2',
+        entryId1: entriesList[p1Index] === 'BYE' ? null : entriesList[p1Index],
+        entryId2: entriesList[p2Index] === 'BYE' ? null : entriesList[p2Index],
+        score1: null, score2: null, status: 'belum_dimainkan',
+      });
+    }
+
+    // Round of 16 (Matches 17 to 24)
+    for (let i = 0; i < 8; i++) {
+      const nextMatch = 25 + Math.floor(i / 2);
+      const nextSlot = (i % 2 === 0) ? 'player1' : 'player2';
+
+      matches.push({
+        id: `ko-${divisionId}-${17 + i}`,
+        divisionId,
+        roundName: 'Babak 16 Besar',
+        type: 'KNOCKOUT',
+        matchNum: 17 + i,
+        nextMatchNum: nextMatch,
+        nextMatchSlot: nextSlot as 'player1' | 'player2',
+        entryId1: null, entryId2: null, score1: null, score2: null, status: 'belum_dimainkan',
+      });
+    }
+
+    // Quarterfinals (Matches 25 to 28)
+    for (let i = 0; i < 4; i++) {
+      const nextMatch = 29 + Math.floor(i / 2);
+      const nextSlot = (i % 2 === 0) ? 'player1' : 'player2';
+
+      matches.push({
+        id: `ko-${divisionId}-${25 + i}`,
+        divisionId,
+        roundName: 'Perempat Final',
+        type: 'KNOCKOUT',
+        matchNum: 25 + i,
+        nextMatchNum: nextMatch,
+        nextMatchSlot: nextSlot as 'player1' | 'player2',
+        entryId1: null, entryId2: null, score1: null, score2: null, status: 'belum_dimainkan',
+      });
+    }
+
+    // Semifinals (Matches 29 & 30) -> Finals (Match 31)
+    matches.push({
+      id: `ko-${divisionId}-29`,
+      divisionId,
+      roundName: 'Semifinal',
+      type: 'KNOCKOUT',
+      matchNum: 29,
+      nextMatchNum: 31,
+      nextMatchSlot: 'player1',
+      entryId1: null, entryId2: null, score1: null, score2: null, status: 'belum_dimainkan',
+    });
+    matches.push({
+      id: `ko-${divisionId}-30`,
+      divisionId,
+      roundName: 'Semifinal',
+      type: 'KNOCKOUT',
+      matchNum: 30,
+      nextMatchNum: 31,
+      nextMatchSlot: 'player2',
+      entryId1: null, entryId2: null, score1: null, score2: null, status: 'belum_dimainkan',
+    });
+
+    // Finals (Match 31)
+    matches.push({
+      id: `ko-${divisionId}-31`,
+      divisionId,
+      roundName: 'Final',
+      type: 'KNOCKOUT',
+      matchNum: 31,
+      entryId1: null, entryId2: null, score1: null, score2: null, status: 'belum_dimainkan',
+    });
+
+    // Bronze Match (Match 32)
+    matches.push({
+      id: `ko-${divisionId}-32`,
+      divisionId,
+      roundName: 'Perebutan Juara 3',
+      type: 'KNOCKOUT',
+      matchNum: 32,
+      isBronzeMatch: true,
+      entryId1: null, entryId2: null, score1: null, score2: null, status: 'belum_dimainkan',
+    });
+  }
   else {
     // For size 16 (and fallback for 32, we map them out dynamically)
     // To keep it clean and robust, let's build size 16 directly
@@ -1184,6 +1274,9 @@ export function propagateKnockoutResult(
     } else if (matchNum === 13 || matchNum === 14) {
       bronzeMatchNum = 16;
       slot = matchNum === 13 ? 'player1' : 'player2';
+    } else if (matchNum === 29 || matchNum === 30) {
+      bronzeMatchNum = 32;
+      slot = matchNum === 29 ? 'player1' : 'player2';
     }
 
     if (bronzeMatchNum > 0) {

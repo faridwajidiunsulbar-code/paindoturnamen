@@ -79,6 +79,13 @@ create table if not exists public.divisions (
     wildcard_manual_rankings jsonb,
     wildcard_manual_reason text,
     wildcard_manual_cluster jsonb,
+    bracket_arrangement_mode text check (bracket_arrangement_mode is null or bracket_arrangement_mode in ('automatic', 'group_cross', 'manual')),
+    group_cross_pairings jsonb,
+    manual_slot_assignments jsonb,
+    manual_arrangement_reason text,
+    arrangement_confirmed_at timestamp with time zone,
+    arrangement_locked boolean default false not null,
+    arrangement_invalidated_reason text,
     created_at timestamp with time zone default timezone('utc'::text, now()) not null,
     updated_at timestamp with time zone default timezone('utc'::text, now()) not null,
     unique(tournament_id, match_type_id, age_group_id)

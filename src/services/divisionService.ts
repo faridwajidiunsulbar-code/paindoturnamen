@@ -1,6 +1,7 @@
 import { supabase, isSupabaseConfigured } from '../lib/supabaseClient';
 import { Tournament, Division, TournamentEvent, AgeGroup, ServiceResult } from '../types';
 import { saveTournamentToSupabase } from './tournamentService';
+import { getDbGroupId } from './groupService';
 
 export const getDbEventId = (id: string, tournamentId: string) => {
   if (!id) return id;
@@ -139,7 +140,30 @@ export async function saveDivisionsToSupabase(tournament: Tournament): Promise<S
           status: div.knockoutStage ? 'knockout_stage' : (div.groups.length > 0 ? 'group_stage' : 'pending'),
           wildcard_manual_rankings: div.knockoutStage?.wildcardManualRankings && typeof div.knockoutStage.wildcardManualRankings === 'object' ? div.knockoutStage.wildcardManualRankings : null,
           wildcard_manual_reason: div.knockoutStage?.wildcardManualReason?.trim() || null,
-          wildcard_manual_cluster: div.knockoutStage?.wildcardManualCluster || null
+          wildcard_manual_cluster: div.knockoutStage?.wildcardManualCluster || null,
+          bracket_arrangement_mode: div.knockoutStage?.bracketArrangementMode || 'automatic',
+          group_cross_pairings: div.knockoutStage?.groupCrossPairings && Array.isArray(div.knockoutStage.groupCrossPairings)
+            ? div.knockoutStage.groupCrossPairings.map(p => ({
+                ...p,
+                groupOneId: getDbGroupId(p.groupOneId, dbId),
+                groupTwoId: getDbGroupId(p.groupTwoId, dbId)
+              }))
+            : null,
+          manual_slot_assignments: div.knockoutStage?.manualSlotAssignments && typeof div.knockoutStage.manualSlotAssignments === 'object'
+            ? Object.fromEntries(
+                Object.entries(div.knockoutStage.manualSlotAssignments).map(([key, val]) => [
+                  key,
+                  val ? {
+                    ...val,
+                    sourceGroupId: val.sourceGroupId ? getDbGroupId(val.sourceGroupId, dbId) : undefined
+                  } : null
+                ])
+              )
+            : null,
+          manual_arrangement_reason: div.knockoutStage?.manualArrangementReason?.trim() || null,
+          arrangement_confirmed_at: div.knockoutStage?.arrangementConfirmedAt || null,
+          arrangement_locked: !!div.knockoutStage?.arrangementLocked,
+          arrangement_invalidated_reason: div.knockoutStage?.arrangementInvalidatedReason || null
         });
       });
 

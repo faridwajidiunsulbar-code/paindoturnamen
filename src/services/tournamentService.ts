@@ -521,7 +521,7 @@ export async function loadTournamentFromSupabase(tournamentId: string): Promise<
       const koMatches = divMatches.filter((m: any) => m.stage === 'knockout' || m.stage === 'bronze' || m.stage === 'final');
       let knockoutStage: KnockoutStage | null = null;
 
-      if (koMatches.length > 0 || (slotData && slotData.some((s: any) => s.division_id === div.id))) {
+      if (koMatches.length > 0 || (slotData && slotData.some((s: any) => s.division_id === div.id)) || div.bracket_arrangement_mode || div.group_cross_pairings || div.manual_slot_assignments) {
         const sortedKoMatches: Match[] = koMatches.map((m: any) => ({
           id: m.id,
           divisionId: m.division_id,
@@ -574,6 +574,70 @@ export async function loadTournamentFromSupabase(tournamentId: string): Promise<
           }
         }
 
+        // Validate PAINDO-008E arrangement fields
+        const validModes = ['automatic', 'group_cross', 'manual'];
+        const validatedMode = validModes.includes(div.bracket_arrangement_mode)
+          ? div.bracket_arrangement_mode
+          : 'automatic';
+
+        let validatedGroupCrossPairings: any[] | undefined = undefined;
+        if (Array.isArray(div.group_cross_pairings)) {
+          const validPairings: any[] = [];
+          const usedGroupIds = new Set<string>();
+          let isValid = true;
+          for (const p of div.group_cross_pairings) {
+            if (
+              p &&
+              typeof p === 'object' &&
+              typeof p.id === 'string' &&
+              typeof p.groupOneId === 'string' &&
+              typeof p.groupTwoId === 'string' &&
+              p.groupOneId !== p.groupTwoId &&
+              !usedGroupIds.has(p.groupOneId) &&
+              !usedGroupIds.has(p.groupTwoId)
+            ) {
+              usedGroupIds.add(p.groupOneId);
+              usedGroupIds.add(p.groupTwoId);
+              validPairings.push({
+                id: p.id,
+                groupOneId: p.groupOneId,
+                groupTwoId: p.groupTwoId,
+                order: Number.isInteger(p.order) ? p.order : validPairings.length + 1
+              });
+            } else {
+              isValid = false;
+              break;
+            }
+          }
+          if (isValid && validPairings.length > 0) {
+            validatedGroupCrossPairings = validPairings;
+          } else if (!isValid) {
+            console.warn(`[Integrity Warning] Invalid group_cross_pairings ignored for division ${div.id}:`, div.group_cross_pairings);
+          }
+        }
+
+        let validatedManualSlotAssignments: Record<string, any> | undefined = undefined;
+        if (div.manual_slot_assignments && typeof div.manual_slot_assignments === 'object' && !Array.isArray(div.manual_slot_assignments)) {
+          const validMap: Record<string, any> = {};
+          const validSources = ['group_rank', 'wildcard_rank', 'bye', 'manual'];
+          let isValid = true;
+          for (const [k, val] of Object.entries(div.manual_slot_assignments)) {
+            if (val && typeof val === 'object' && validSources.includes((val as any).sourceType)) {
+              validMap[k] = val;
+            } else if (val === null) {
+              validMap[k] = null;
+            } else {
+              isValid = false;
+              break;
+            }
+          }
+          if (isValid && Object.keys(validMap).length > 0) {
+            validatedManualSlotAssignments = validMap;
+          } else if (!isValid) {
+            console.warn(`[Integrity Warning] Invalid manual_slot_assignments ignored for division ${div.id}:`, div.manual_slot_assignments);
+          }
+        }
+
         const divSlots = (slotData || [])
           .filter((s: any) => s.division_id === div.id)
           .sort((a: any, b: any) => a.seed_no - b.seed_no);
@@ -612,7 +676,14 @@ export async function loadTournamentFromSupabase(tournamentId: string): Promise<
           slots: reconstructedSlots,
           wildcardManualRankings: validatedWildcardManualRankings,
           wildcardManualReason: div.wildcard_manual_reason?.trim() || undefined,
-          wildcardManualCluster: validatedWildcardManualCluster
+          wildcardManualCluster: validatedWildcardManualCluster,
+          bracketArrangementMode: validatedMode,
+          groupCrossPairings: validatedGroupCrossPairings,
+          manualSlotAssignments: validatedManualSlotAssignments,
+          manualArrangementReason: div.manual_arrangement_reason?.trim() || undefined,
+          arrangementConfirmedAt: div.arrangement_confirmed_at || undefined,
+          arrangementLocked: !!div.arrangement_locked,
+          arrangementInvalidatedReason: div.arrangement_invalidated_reason || undefined
         };
       }
 
