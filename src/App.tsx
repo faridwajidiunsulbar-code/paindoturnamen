@@ -139,6 +139,14 @@ export default function App() {
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState<boolean>(false);
   const [autoSyncEnabled, setAutoSyncEnabled] = useState<boolean>(false);
 
+  // Concurrency conflict modal state
+  const [conflictData, setConflictData] = useState<{
+    localRevision?: number;
+    cloudRevision?: number;
+    localUpdatedAt?: string;
+    cloudUpdatedAt?: string;
+  } | null>(null);
+
   // Supabase & Modal states
   const [user, setUser] = useState<any>(null);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
@@ -209,6 +217,7 @@ export default function App() {
     const sanitized = sanitizeTournamentData({
       ...updated,
       updatedAt: !isFromCloud ? now : (updated.updatedAt || now),
+      cloudUpdatedAt: isFromCloud ? (updated.cloudUpdatedAt || now) : updated.cloudUpdatedAt,
       cloudSyncedAt: isFromCloud ? now : updated.cloudSyncedAt
     });
     setTournament(sanitized);
@@ -294,6 +303,27 @@ export default function App() {
     }
   }, [tournament?.id]);
 
+  // Conflict Resolution Handlers
+  const handleReloadCloudVersion = async () => {
+    if (!tournament?.id) return;
+    setIsSyncing('syncing');
+    const loaded = await loadTournamentFromSupabase(tournament.id);
+    if (loaded) {
+      updateTournamentState(loaded, true);
+      setIsSyncing('synced');
+      setConflictData(null);
+      showToast('Berhasil memuat versi data terbaru dari Cloud!', 'success');
+    } else {
+      setIsSyncing('error');
+      showToast('Gagal memuat data dari Cloud.', 'error');
+    }
+  };
+
+  const handleKeepLocalVersion = () => {
+    setConflictData(null);
+    showToast('Tetap di versi lokal. Perubahan belum disimpan ke Cloud.', 'info');
+  };
+
   // Manual save to Cloud Database on button click
   const handleManualSaveToCloud = async () => {
     if (!isSupabaseConfigured) {
@@ -316,13 +346,39 @@ export default function App() {
     if (result.success) {
       setIsSyncing('synced');
       setHasUnsavedChanges(false);
-      updateTournamentState(tournament, true);
+      const resData = result.data as any;
+      updateTournamentState({
+        ...tournament,
+        cloudRevision: resData.cloudRevision,
+        cloudUpdatedAt: resData.cloudUpdatedAt,
+        cloudSaveStatus: resData.cloudSaveStatus,
+        cloudSyncedAt: resData.savedAt
+      }, true);
       refreshOnlineTournamentsList();
       showToast('Berhasil! Jadwal pertandingan, skor, & klasemen DISIMPAN ke Database Cloud.', 'success');
     } else {
       setIsSyncing('error');
-      const lastErr = ('error' in result && result.error.message) ? result.error.message : 'Gagal menyimpan ke database cloud.';
-      showToast(`Gagal menyimpan: ${lastErr}`, 'error');
+      if ((result as any).isConflict) {
+        setAutoSyncEnabled(false);
+        setConflictData({
+          localRevision: (result as any).conflictDetails?.localRevision || tournament.cloudRevision,
+          cloudRevision: (result as any).conflictDetails?.cloudRevision,
+          localUpdatedAt: (result as any).conflictDetails?.localLoadedAt || tournament.updatedAt || tournament.cloudUpdatedAt,
+          cloudUpdatedAt: (result as any).conflictDetails?.cloudUpdatedAt
+        });
+      } else if ((result as any).partialSave) {
+        const partialDetails = (result as any).partialDetails;
+        updateTournamentState({
+          ...tournament,
+          cloudRevision: partialDetails?.reservedRevision ?? tournament.cloudRevision,
+          cloudSaveStatus: 'failed'
+        }, false);
+        const lastErr = ('error' in result && result.error.message) ? result.error.message : 'Penyimpanan sebagian gagal.';
+        showToast(lastErr, 'error');
+      } else {
+        const lastErr = ('error' in result && result.error.message) ? result.error.message : 'Gagal menyimpan ke database cloud.';
+        showToast(`Gagal menyimpan: ${lastErr}`, 'error');
+      }
     }
   };
 
@@ -389,7 +445,14 @@ export default function App() {
         if (result.success) {
           setIsSyncing('synced');
           setHasUnsavedChanges(false);
-          updateTournamentState(tournament, true);
+          const resData = result.data as any;
+          updateTournamentState({
+            ...tournament,
+            cloudRevision: resData.cloudRevision,
+            cloudUpdatedAt: resData.cloudUpdatedAt,
+            cloudSaveStatus: resData.cloudSaveStatus,
+            cloudSyncedAt: resData.savedAt
+          }, true);
           setShowSyncSuccessMsg(true);
           showToast('Data skor & susunan grup otomatis DIPUBLIKASI ke Cloud Web!', 'success');
           const timer = setTimeout(() => setShowSyncSuccessMsg(false), 2000);
@@ -397,6 +460,24 @@ export default function App() {
           return () => clearTimeout(timer);
         } else {
           setIsSyncing('error');
+          if ((result as any).isConflict) {
+            setAutoSyncEnabled(false);
+            setConflictData({
+              localRevision: (result as any).conflictDetails?.localRevision || tournament.cloudRevision,
+              cloudRevision: (result as any).conflictDetails?.cloudRevision,
+              localUpdatedAt: (result as any).conflictDetails?.localLoadedAt || tournament.updatedAt || tournament.cloudUpdatedAt,
+              cloudUpdatedAt: (result as any).conflictDetails?.cloudUpdatedAt
+            });
+          } else if ((result as any).partialSave) {
+            const partialDetails = (result as any).partialDetails;
+            setAutoSyncEnabled(false);
+            updateTournamentState({
+              ...tournament,
+              cloudRevision: partialDetails?.reservedRevision ?? tournament.cloudRevision,
+              cloudSaveStatus: 'failed'
+            }, false);
+            showToast('Auto-Sync dihentikan: Penyimpanan sebagian gagal.', 'error');
+          }
         }
       };
       
@@ -1282,6 +1363,68 @@ export default function App() {
         onClose={() => setIsCreateModalOpen(false)}
         onCreate={handleCreateTournament}
       />
+
+      {/* Conflict Resolution Modal Overlay */}
+      {conflictData && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fade-in" id="concurrency-conflict-modal">
+          <div className="bg-white rounded-2xl max-w-md w-full border border-amber-200 p-6 shadow-2xl transform transition-all animate-scale-up" id="concurrency-conflict-card">
+            <div className="flex items-center gap-3 text-amber-600 mb-4">
+              <div className="p-2.5 bg-amber-50 rounded-xl border border-amber-200">
+                <AlertCircle className="w-6 h-6 text-amber-600" />
+              </div>
+              <div>
+                <h3 className="text-lg font-extrabold text-slate-900">Data Turnamen Telah Berubah</h3>
+                <p className="text-xs text-amber-700 font-semibold">Konflik Penyimpanan Terdeteksi</p>
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-600 mb-4 leading-relaxed">
+              Turnamen ini telah diperbarui dari tab atau perangkat lain setelah Anda membukanya. Penyimpanan dibatalkan agar data terbaru di Cloud tidak tertimpa.
+            </p>
+
+            <div className="bg-slate-50 rounded-xl p-3 mb-5 border border-slate-200 text-xs text-slate-700 space-y-1.5">
+              <div className="flex justify-between items-center">
+                <span className="text-slate-500">Versi Di-edit (Lokal):</span>
+                <span className="font-mono font-semibold text-slate-800">
+                  Revisi {conflictData.localRevision ?? tournament?.cloudRevision ?? 1}
+                  {conflictData.localUpdatedAt ? ` (${new Date(conflictData.localUpdatedAt).toLocaleTimeString('id-ID')})` : ''}
+                </span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-slate-500">Versi Terbaru Cloud:</span>
+                <span className="font-mono font-semibold text-emerald-700">
+                  Revisi {conflictData.cloudRevision ?? (tournament?.cloudRevision ? tournament.cloudRevision + 1 : 2)}
+                  {conflictData.cloudUpdatedAt ? ` (${new Date(conflictData.cloudUpdatedAt).toLocaleTimeString('id-ID')})` : ''}
+                </span>
+              </div>
+              <div className="pt-2 border-t border-slate-200 flex justify-between items-center">
+                <span className="font-bold text-slate-600">Status Penyimpanan:</span>
+                <span className="inline-block px-2 py-0.5 rounded bg-amber-100 text-amber-800 font-bold text-[11px] border border-amber-200">Konflik / Belum Tersimpan</span>
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-2.5">
+              <button
+                type="button"
+                onClick={handleReloadCloudVersion}
+                className="w-full px-4 py-2.5 bg-navy hover:bg-navy-light text-white font-extrabold rounded-xl text-xs transition shadow-sm flex items-center justify-center gap-2 cursor-pointer"
+                id="btn-reload-cloud-version"
+              >
+                <RefreshCw className="w-4 h-4 text-neon" />
+                Muat Versi Cloud Terbaru
+              </button>
+              <button
+                type="button"
+                onClick={handleKeepLocalVersion}
+                className="w-full px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs transition cursor-pointer"
+                id="btn-keep-local-version"
+              >
+                Tetap di Versi Lokal
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {showConfirm && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fade-in" id="app-confirm-modal">

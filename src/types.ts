@@ -104,6 +104,9 @@ export interface Tournament {
   ownerId?: string;
   updatedAt?: string;
   cloudSyncedAt?: string;
+  cloudUpdatedAt?: string;
+  cloudRevision?: number;
+  cloudSaveStatus?: 'complete' | 'saving' | 'failed';
 }
 
 export type ServiceResult<T> =

@@ -105,62 +105,252 @@ export async function saveTournamentToSupabase(tournament: Tournament): Promise<
       }
     }
 
-    // 1. Upsert tournament header
-    const tourneyPayload: any = {
-      id: tournament.id,
-      name: tournament.name,
-      date: tournament.date,
-      location: tournament.location || '',
-      status: 'active',
-      updated_at: new Date().toISOString()
-    };
-    if (user?.id) {
-      tourneyPayload.owner_id = user.id;
-    }
+    // 1. Validasi Expected Revision
+    const expectedRevision = typeof tournament.cloudRevision === 'number' ? tournament.cloudRevision : 1;
 
-    const { error: tError } = await supabase
-      .from('tournaments')
-      .upsert(tourneyPayload);
-
-    if (tError) {
+    if (!Number.isInteger(expectedRevision) || expectedRevision < 1) {
       return {
         success: false,
-        error: { module: 'tournament', operation: 'insert', message: `[Tournaments Table] ${tError.message || JSON.stringify(tError)}` }
+        error: {
+          code: 'INVALID_CLOUD_REVISION',
+          module: 'tournament',
+          operation: 'reserve_revision',
+          message: 'Metadata revisi cloud tidak valid. Muat ulang turnamen sebelum menyimpan.'
+        }
       };
     }
 
-    // 2. Delegate Division Domain save (cleans & upserts match_types, age_groups, divisions)
+    // Check if tournament already exists in Supabase Cloud
+    const { data: existingCloudTourney } = await supabase
+      .from('tournaments')
+      .select('id, revision, updated_at, save_status, owner_id')
+      .eq('id', tournament.id)
+      .maybeSingle();
+
+    let reservedRevision = 1;
+
+    if (existingCloudTourney) {
+      // Existing tournament in Cloud -> Perform Atomic Conditional Update Reservation
+      const cloudRev = typeof existingCloudTourney.revision === 'number'
+        ? existingCloudTourney.revision
+        : (existingCloudTourney.revision ? parseInt(existingCloudTourney.revision, 10) : 1);
+
+      const targetRevision = expectedRevision || cloudRev;
+
+      const reservePayload: any = {
+        name: tournament.name,
+        date: tournament.date,
+        location: tournament.location || '',
+        status: 'active',
+        revision: targetRevision + 1,
+        save_status: 'saving'
+      };
+      if (user?.id) {
+        reservePayload.owner_id = user.id;
+      }
+
+      const { data: reservedData, error: reservationError } = await supabase
+        .from('tournaments')
+        .update(reservePayload)
+        .eq('id', tournament.id)
+        .eq('revision', targetRevision)
+        .select('revision, updated_at, save_status');
+
+      if (reservationError) {
+        return {
+          success: false,
+          error: {
+            code: 'RESERVATION_FAILED',
+            module: 'tournament',
+            operation: 'reserve_revision',
+            message: `Gagal melakukan reservasi revisi: ${reservationError.message}`
+          }
+        };
+      }
+
+      // Zero rows returned -> Concurrency Conflict!
+      if (!reservedData || reservedData.length === 0) {
+        const { data: latestCloud } = await supabase
+          .from('tournaments')
+          .select('revision, updated_at')
+          .eq('id', tournament.id)
+          .maybeSingle();
+
+        return {
+          success: false,
+          isConflict: true,
+          error: {
+            code: 'CONCURRENCY_CONFLICT',
+            module: 'tournament',
+            operation: 'reserve_revision',
+            message: 'Data turnamen di Cloud telah diperbarui dari tab atau perangkat lain. Penyimpanan dibatalkan agar data terbaru tidak tertimpa.'
+          },
+          conflictDetails: {
+            localRevision: targetRevision,
+            cloudRevision: latestCloud?.revision ? Number(latestCloud.revision) : targetRevision + 1,
+            localLoadedAt: tournament.cloudUpdatedAt,
+            cloudUpdatedAt: latestCloud?.updated_at
+          }
+        } as any;
+      }
+
+      if (reservedData.length > 1) {
+        return {
+          success: false,
+          error: {
+            code: 'REVISION_RESERVATION_INTEGRITY_ERROR',
+            module: 'tournament',
+            operation: 'reserve_revision',
+            message: 'Terjadi kesalahan integritas saat reservasi revisi.'
+          }
+        };
+      }
+
+      reservedRevision = Number(reservedData[0].revision);
+    } else {
+      // New tournament creation -> Insert new row with revision 1 and save_status 'saving'
+      const newPayload: any = {
+        id: tournament.id,
+        name: tournament.name,
+        date: tournament.date,
+        location: tournament.location || '',
+        status: 'active',
+        revision: 1,
+        save_status: 'saving'
+      };
+      if (user?.id) {
+        newPayload.owner_id = user.id;
+      }
+
+      const { data: insertedData, error: insertError } = await supabase
+        .from('tournaments')
+        .insert(newPayload)
+        .select('revision, updated_at, save_status');
+
+      if (insertError || !insertedData || insertedData.length === 0) {
+        return {
+          success: false,
+          error: {
+            module: 'tournament',
+            operation: 'insert',
+            message: `[Tournaments Table] ${insertError?.message || 'Gagal membuat header turnamen baru'}`
+          }
+        };
+      }
+
+      reservedRevision = Number(insertedData[0].revision);
+    }
+
+    // 2. Delegate child domain saves
+    let childErrorModule = '';
+    let childErrorMsg = '';
+
+    // 2.1 Divisions Domain
     const divResult = await saveDivisionsToSupabase(tournament);
     if (!divResult.success) {
-      return divResult;
+      childErrorModule = 'divisions';
+      childErrorMsg = (divResult as any).error?.message || 'Gagal menyimpan divisi.';
     }
 
-    // 3. Delegate Entry Domain save (cleans & upserts entries)
-    const entResult = await saveEntriesToSupabase(tournament);
-    if (!entResult.success) {
-      return { success: false, error: (entResult as { success: false; error: any }).error };
-    }
-    const insertedEntryIds = entResult.data.insertedEntryIds;
-
-    // 4. Delegate Group Domain save (cleans & upserts division_groups and group_members)
-    const grpResult = await saveGroupsAndMembersToSupabase(tournament, insertedEntryIds);
-    if (!grpResult.success) {
-      return grpResult;
-    }
-
-    // 5. Delegate Match Domain save (cleans & upserts round_robin and knockout matches)
-    const matchResult = await saveMatchesToSupabase(tournament, insertedEntryIds);
-    if (!matchResult.success) {
-      return matchResult;
+    // 2.2 Entries Domain
+    let insertedEntryIds: Set<string> = new Set();
+    if (!childErrorModule) {
+      const entResult = await saveEntriesToSupabase(tournament);
+      if (!entResult.success) {
+        childErrorModule = 'entries';
+        childErrorMsg = (entResult as any).error?.message || 'Gagal menyimpan peserta.';
+      } else {
+        insertedEntryIds = entResult.data.insertedEntryIds;
+      }
     }
 
-    // 6. Delegate Knockout & Champions Domain save (cleans & upserts knockout_slots and champions)
-    const koResult = await saveKnockoutSlotsAndChampionsToSupabase(tournament, insertedEntryIds);
-    if (!koResult.success) {
-      return koResult;
+    // 2.3 Groups Domain
+    if (!childErrorModule) {
+      const grpResult = await saveGroupsAndMembersToSupabase(tournament, insertedEntryIds);
+      if (!grpResult.success) {
+        childErrorModule = 'groups';
+        childErrorMsg = (grpResult as any).error?.message || 'Gagal menyimpan grup.';
+      }
     }
 
-    return { success: true, data: true };
+    // 2.4 Matches Domain
+    if (!childErrorModule) {
+      const matchResult = await saveMatchesToSupabase(tournament, insertedEntryIds);
+      if (!matchResult.success) {
+        childErrorModule = 'matches';
+        childErrorMsg = (matchResult as any).error?.message || 'Gagal menyimpan pertandingan.';
+      }
+    }
+
+    // 2.5 Knockout & Champions Domain
+    if (!childErrorModule) {
+      const koResult = await saveKnockoutSlotsAndChampionsToSupabase(tournament, insertedEntryIds);
+      if (!koResult.success) {
+        childErrorModule = 'knockout';
+        childErrorMsg = (koResult as any).error?.message || 'Gagal menyimpan babak gugur/juara.';
+      }
+    }
+
+    // If any child domain failed, mark save_status as 'failed' in Supabase
+    if (childErrorModule) {
+      try {
+        await supabase
+          .from('tournaments')
+          .update({ save_status: 'failed' })
+          .eq('id', tournament.id)
+          .eq('revision', reservedRevision);
+      } catch (markErr) {
+        console.warn('Could not mark save_status as failed:', markErr);
+      }
+
+      return {
+        success: false,
+        partialSave: true,
+        error: {
+          code: 'PARTIAL_SAVE_FAILED',
+          module: childErrorModule,
+          operation: 'save_domain',
+          message: `Penyimpanan ke cloud tidak selesai pada modul ${childErrorModule}: ${childErrorMsg}. Sebagian data mungkin telah diperbarui. Data lokal tetap dipertahankan. Silakan periksa koneksi dan coba simpan ulang.`
+        },
+        partialDetails: {
+          reservedRevision,
+          cloudSaveStatus: 'failed'
+        }
+      } as any;
+    }
+
+    // 3. Finalization: Update save_status = 'complete'
+    const { data: finalizedRows, error: finalizeError } = await supabase
+      .from('tournaments')
+      .update({ save_status: 'complete' })
+      .eq('id', tournament.id)
+      .eq('revision', reservedRevision)
+      .select('revision, updated_at, save_status');
+
+    if (finalizeError || !finalizedRows || finalizedRows.length !== 1) {
+      return {
+        success: false,
+        error: {
+          code: 'FINALIZATION_FAILED',
+          module: 'tournament',
+          operation: 'finalize_save',
+          message: 'Gagal memfinalisasi status penyimpanan cloud.'
+        }
+      };
+    }
+
+    const finalRevision = Number(finalizedRows[0].revision);
+    const finalUpdatedAt = finalizedRows[0].updated_at;
+
+    return {
+      success: true,
+      data: {
+        savedAt: finalUpdatedAt,
+        cloudRevision: finalRevision,
+        cloudUpdatedAt: finalUpdatedAt,
+        cloudSaveStatus: 'complete'
+      } as any
+    };
   } catch (err: any) {
     console.error('Failed to save tournament to Supabase:', err);
     const msg = err?.message || err?.details || (typeof err === 'string' ? err : 'Gagal menyimpan data turnamen ke Supabase Cloud.');
@@ -383,6 +573,12 @@ export async function loadTournamentFromSupabase(tournamentId: string): Promise<
       };
     });
 
+    const revision = typeof tData.revision === 'number'
+      ? tData.revision
+      : (tData.revision ? parseInt(tData.revision, 10) : 1);
+    const saveStatus: 'complete' | 'saving' | 'failed' =
+      (tData.save_status === 'saving' || tData.save_status === 'failed') ? tData.save_status : 'complete';
+
     const reconstructedTournament: Tournament = {
       id: tData.id,
       name: tData.name,
@@ -391,7 +587,12 @@ export async function loadTournamentFromSupabase(tournamentId: string): Promise<
       events,
       ageGroups,
       activeDivisions,
-      ownerId: tData.owner_id
+      ownerId: tData.owner_id,
+      updatedAt: tData.updated_at,
+      cloudUpdatedAt: tData.updated_at,
+      cloudRevision: revision,
+      cloudSaveStatus: saveStatus,
+      cloudSyncedAt: new Date().toISOString()
     };
 
     return reconstructedTournament;
