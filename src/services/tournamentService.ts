@@ -467,6 +467,23 @@ export async function loadTournamentFromSupabase(tournamentId: string): Promise<
     const entResult = await loadEntriesForTournament(tournamentId);
     const entData = entResult.success ? entResult.data : [];
 
+    console.log('CLOUD_ENTRY_ROWS_RAW', (entData || []).map((row: any) => ({
+      id: row.id,
+      division_id: row.division_id,
+      player1_name: row.player1_name,
+      player2_name: row.player2_name,
+      club: row.club
+    })));
+
+    const mappedEntriesList = (entData || []).map((row: any) => mapEntryFromRow(row));
+
+    console.log('CLOUD_ENTRIES_MAPPED', mappedEntriesList.map((entry: any) => ({
+      id: entry.id,
+      name1: entry.name1,
+      name2: entry.name2,
+      affiliation: entry.affiliation
+    })));
+
     // 4. Load Groups Domain
     const grpResult = await loadGroupsForTournament(tournamentId);
     const { groups: gData, groupMembers: gmData } = grpResult.success ? grpResult.data : { groups: [], groupMembers: [] };

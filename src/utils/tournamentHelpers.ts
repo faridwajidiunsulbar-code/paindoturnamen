@@ -95,7 +95,6 @@ export function calculateGroupStandings(
     standingsMap[id] = {
       entryId: id,
       entryName,
-      entry: entry || undefined,
       played: 0,
       won: 0,
       lost: 0,

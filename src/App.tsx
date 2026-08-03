@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { Tournament, Division } from './types';
+import { Tournament, Division, Entry } from './types';
 import { getInitialTournament, DEFAULT_EVENTS, DEFAULT_AGE_GROUPS } from './utils/mockData';
 import { isSupabaseConfigured, supabase } from './lib/supabaseClient';
 import { 
@@ -215,6 +215,14 @@ export default function App() {
 
   // Centralized function to update tournament in state and persist to LocalStorage
   const updateTournamentState = (updated: Tournament, isFromCloud = false) => {
+    console.log(
+      'TOURNAMENT_BEFORE_SET_STATE',
+      updated.activeDivisions?.map(div => ({
+        id: div.id,
+        entryCount: div.entries?.length ?? 0,
+        firstEntry: div.entries?.[0]
+      }))
+    );
     const now = new Date().toISOString();
     const sanitized = sanitizeTournamentData({
       ...updated,
@@ -236,6 +244,45 @@ export default function App() {
     } else {
       setHasUnsavedChanges(false);
     }
+  };
+
+  useEffect(() => {
+    if (tournament && tournament.activeDivisions) {
+      console.log(
+        'TOURNAMENT_STATE_CURRENT',
+        tournament.activeDivisions.map(div => ({
+          id: div.id,
+          entryCount: div.entries?.length ?? 0,
+          firstEntry: div.entries?.[0]
+        }))
+      );
+    }
+  }, [tournament]);
+
+  const handleExportPdf = () => {
+    const audit = tournament.activeDivisions.map(div => ({
+      id: div.id,
+      entryCount: div.entries?.length ?? 0,
+      entries: div.entries?.map(entry => ({
+        id: entry.id,
+        name1: entry.name1,
+        name2: entry.name2
+      }))
+    }));
+
+    console.log('PDF_BUTTON_STATE_AUDIT', audit);
+
+    const entriesByDivMap = new Map<string, Entry[]>();
+    (tournament.activeDivisions || []).forEach(div => {
+      const divId = String(div.id ?? '').trim();
+      entriesByDivMap.set(divId, div.entries || []);
+    });
+
+    exportTournamentToPDF({
+      tournament,
+      divisions: tournament.activeDivisions,
+      entriesByDivision: entriesByDivMap,
+    });
   };
 
   // Startup effect: Always preserve local saved state on page refresh.
@@ -1202,7 +1249,7 @@ export default function App() {
 
             {isAdmin && (
               <button
-                onClick={() => exportTournamentToPDF(tournament)}
+                onClick={handleExportPdf}
                 className="flex items-center gap-1.5 px-3 py-1.5 bg-navy hover:bg-navy-light text-neon font-extrabold rounded-lg text-xs transition duration-200 shadow-xs cursor-pointer"
                 title="Ekspor Seluruh Hasil & Hasil Pertandingan ke PDF"
                 id="export-pdf-top-btn"
@@ -1261,7 +1308,7 @@ export default function App() {
           
           {selectedMenu === 'dashboard' && (
             <div className="space-y-8">
-              <OverallSummary tournament={tournament} onNavigateToDivision={navigateToDivision} isAdmin={isAdmin} />
+              <OverallSummary tournament={tournament} onNavigateToDivision={navigateToDivision} isAdmin={isAdmin} onExportPdf={handleExportPdf} />
               <TournamentClosureSection
                 tournament={tournament}
                 onUpdateTournament={updateTournamentState}

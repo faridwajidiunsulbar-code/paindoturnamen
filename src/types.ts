@@ -280,7 +280,6 @@ export type ServiceResult<T> =
 export interface GroupStandingRow {
   entryId: string;
   entryName: string;
-  entry?: Entry;
   played: number;
   won: number;
   lost: number;

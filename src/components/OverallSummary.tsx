@@ -4,7 +4,7 @@
  */
 
 import React from 'react';
-import { Tournament, Division } from '../types';
+import { Tournament, Division, Entry } from '../types';
 import { Trophy, Award, Medal, Users, Calendar, MapPin, CheckCircle, Clock, Download, Info, Calculator, Zap, ShieldAlert } from 'lucide-react';
 import { exportTournamentToPDF } from '../utils/pdfExport';
 import GroupStandingsCards from './GroupStandingsCards';
@@ -13,9 +13,10 @@ interface OverallSummaryProps {
   tournament: Tournament;
   onNavigateToDivision?: (divisionId: string) => void;
   isAdmin?: boolean;
+  onExportPdf?: () => void;
 }
 
-export default function OverallSummary({ tournament, onNavigateToDivision, isAdmin = true }: OverallSummaryProps) {
+export default function OverallSummary({ tournament, onNavigateToDivision, isAdmin = true, onExportPdf }: OverallSummaryProps) {
   const { name, date, location, activeDivisions } = tournament;
 
   // Calculate stats
@@ -81,7 +82,32 @@ export default function OverallSummary({ tournament, onNavigateToDivision, isAdm
           {/* Export PDF Button */}
           {isAdmin && (
             <button
-              onClick={() => exportTournamentToPDF(tournament)}
+              onClick={() => {
+                if (onExportPdf) {
+                  onExportPdf();
+                } else {
+                  const audit = tournament.activeDivisions.map(div => ({
+                    id: div.id,
+                    entryCount: div.entries?.length ?? 0,
+                    entries: div.entries?.map(entry => ({
+                      id: entry.id,
+                      name1: entry.name1,
+                      name2: entry.name2
+                    }))
+                  }));
+                  console.log('PDF_BUTTON_STATE_AUDIT', audit);
+                  const entriesByDivMap = new Map<string, Entry[]>();
+                  (tournament.activeDivisions || []).forEach(div => {
+                    const divId = String(div.id ?? '').trim();
+                    entriesByDivMap.set(divId, div.entries || []);
+                  });
+                  exportTournamentToPDF({
+                    tournament,
+                    divisions: tournament.activeDivisions,
+                    entriesByDivision: entriesByDivMap
+                  });
+                }
+              }}
               className="flex items-center gap-2 px-5 py-3 bg-neon text-navy font-black text-xs uppercase tracking-wider rounded-xl transition duration-200 hover:bg-white hover:scale-105 shadow-md shrink-0 self-start border border-navy/10 cursor-pointer"
               title="Ekspor Seluruh Data Hasil Akhir dan Pertandingan ke PDF"
               id="export-pdf-hero-btn"

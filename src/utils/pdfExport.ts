@@ -369,9 +369,46 @@ function getPodiumRows(
   return rows;
 }
 
-export function exportTournamentToPDF(tournament: Tournament): void {
+export interface TournamentPdfInput {
+  tournament: Tournament;
+  divisions?: Division[];
+  entriesByDivision?: Map<string, Entry[]> | Record<string, Entry[]>;
+}
+
+export function exportTournamentToPDF(input: Tournament | TournamentPdfInput): void {
   // --- SECTION C: RUNTIME MARKER ---
   console.warn('PDF_CANONICAL_RESOLVER_V3_ACTIVE');
+
+  const isInputObj = typeof input === 'object' && input !== null && 'tournament' in input;
+  const tournament = isInputObj ? (input as TournamentPdfInput).tournament : (input as Tournament);
+  const inputDivisions = isInputObj && (input as TournamentPdfInput).divisions ? (input as TournamentPdfInput).divisions! : (tournament.activeDivisions || []);
+  const inputEntriesByDiv = isInputObj ? (input as TournamentPdfInput).entriesByDivision : undefined;
+
+  const activeDivisions = inputDivisions || [];
+
+  // Check if expected entries exist but zero loaded
+  const expectedEntryCount = activeDivisions.reduce((total, div) => {
+    return total + (div.groups ?? []).reduce((sum, group) => sum + (group.entryIds?.length || 0), 0);
+  }, 0);
+
+  const loadedEntryCount = activeDivisions.reduce((total, div) => {
+    const divId = String(div.id ?? '').trim();
+    let count = div.entries?.length ?? 0;
+    if (inputEntriesByDiv) {
+      const fromInput = inputEntriesByDiv instanceof Map ? inputEntriesByDiv.get(divId) : (inputEntriesByDiv as Record<string, Entry[]>)[divId];
+      if (fromInput && fromInput.length > 0) count = fromInput.length;
+    }
+    return total + count;
+  }, 0);
+
+  if (expectedEntryCount > 0 && loadedEntryCount === 0) {
+    if (typeof window !== 'undefined' && window.alert) {
+      alert('Data peserta belum selesai dimuat dari Cloud Database. Muat ulang data sebelum membuat laporan.');
+    } else {
+      console.error('Data peserta belum selesai dimuat dari Cloud Database. Muat ulang data sebelum membuat laporan.');
+    }
+    return;
+  }
 
   // --- SECTION A: AUDIT RUNTIME LOGGING ---
   console.debug('PDF_RUNTIME_TOURNAMENT', tournament);
@@ -433,7 +470,7 @@ export function exportTournamentToPDF(tournament: Tournament): void {
     format: 'a4',
   });
 
-  const { name, date, location, activeDivisions = [] } = tournament;
+  const { name, date, location } = tournament;
 
   // Build global fallback entry map
   const globalEntryMap = new Map<string, Entry>();
@@ -533,9 +570,22 @@ export function exportTournamentToPDF(tournament: Tournament): void {
 
   // --- PROCESS EACH DIVISION ---
   activeDivisions.forEach((div, divIndex) => {
-    // Construct division entryMap
+    const divisionId = String(div.id ?? '').trim();
+
+    let divisionEntries: Entry[] = [];
+    if (inputEntriesByDiv) {
+      if (inputEntriesByDiv instanceof Map) {
+        divisionEntries = inputEntriesByDiv.get(divisionId) ?? [];
+      } else {
+        divisionEntries = (inputEntriesByDiv as Record<string, Entry[]>)[divisionId] ?? [];
+      }
+    }
+
+    const fallbackEntries = div.entries ?? [];
+    const sourceEntries = divisionEntries.length > 0 ? divisionEntries : fallbackEntries;
+
     const entryMap = new Map<string, Entry>();
-    for (const entry of div.entries ?? []) {
+    for (const entry of sourceEntries) {
       if (entry && entry.id) {
         entryMap.set(String(entry.id).trim(), entry);
       }
@@ -549,6 +599,15 @@ export function exportTournamentToPDF(tournament: Tournament): void {
         name1: entry.name1,
         name2: entry.name2
       }))
+    });
+
+    console.log('PDF_ENTRY_LOOKUP_FINAL', {
+      divisionId,
+      mapSize: entryMap.size,
+      coachNadir: entryMap.get('ent-rnd-10-1785683219728'),
+      haedar: entryMap.get('ent-rnd-8-1785683219728'),
+      ustadzMul: entryMap.get('ent-rnd-0-1785683219728'),
+      alif: entryMap.get('ent-rnd-4-1785683219728')
     });
 
     if (divIndex > 0) {
@@ -638,8 +697,8 @@ export function exportTournamentToPDF(tournament: Tournament): void {
 
         const standingsHead = ['Pos', 'Nama Tim / Pemain', 'Main', 'M', 'K', 'Poin +/-', 'Selisih', 'Status'];
         const standingsBody = standings.map(row => {
-          const rowKey = row.entryId ?? (row as any).id ?? (row as any).entry?.id;
-          const { nameStr, entry } = resolveEntryDisplay(row.entry || rowKey || row.entryName, entryMap, globalEntryMap);
+          const rowKey = row.entryId ?? (row as any).id;
+          const { nameStr, entry } = resolveEntryDisplay(rowKey || row.entryName, entryMap, globalEntryMap);
           trackLookup(!!entry);
           if (!entry && rowKey) {
             integrityWarnings.push(`Klasemen ${groupTitle}: entryId tidak ditemukan: ${rowKey}`);
