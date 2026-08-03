@@ -24,18 +24,23 @@ export function sanitizePdfText(text: string | null | undefined): string {
     .trim();
 }
 
+function hasLetterOrNumber(value: string): boolean {
+  return /[\p{L}\p{N}]/u.test(value);
+}
+
 /**
  * Helper to thoroughly clean name strings.
- * If a string consists purely of slashes, dashes, brackets, or whitespace, returns empty string.
+ * Preserves apostrophes (e.g. "A'ba Uni'", "O'Connor"), hyphens ("Abdul-Rahman"), etc.
+ * Strings containing letters or numbers are preserved intact.
+ * Strings consisting purely of punctuation/symbols/slashes are returned as empty.
  */
 export function cleanNameStr(val: unknown): string {
   if (val === null || val === undefined) return '';
-  let s = sanitizePdfText(String(val)).trim();
-  // Strip dangling slashes, brackets, hyphens if that's all the string contains
-  if (/^[\/\s\-\(\)]+$/.test(s)) return '';
-  // Strip leading/trailing slashes and spaces
-  s = s.replace(/^[\/\s\-]+|[\/\s\-]+$/g, '').trim();
-  return s;
+  const normalized = String(val)
+    .replace(/[\u0000-\u001F\u007F]/g, '')
+    .trim();
+
+  return hasLetterOrNumber(normalized) ? normalized : '';
 }
 
 export interface ExtractedNames {
@@ -271,8 +276,8 @@ export function getDivisionTitle(division: Division): string {
  * Resolves to "Grup A", "Grup B", etc.
  * Never outputs just "Klasemen".
  */
-export function getGroupName(group: Group | { id?: string; name?: string }): string {
-  if (!group) return 'Grup A';
+export function getGroupName(group: Group | { id?: string; name?: string }, index: number = 0): string {
+  if (!group) return `Grup ${String.fromCharCode(65 + index)}`;
 
   const rawName = String(group.name ?? '').trim();
   const cleanName = cleanNameStr(rawName);
@@ -284,9 +289,13 @@ export function getGroupName(group: Group | { id?: string; name?: string }): str
     return `Grup ${cleanName}`;
   }
 
-  const rawId = String((group as any).id ?? 'A').trim();
+  const rawId = String((group as any).id ?? '').trim();
   const cleanId = rawId.replace(/^(group_|grup_|pool_)/i, '').toUpperCase();
-  return `Grup ${cleanId || 'A'}`;
+  if (cleanId && cleanId.length <= 3 && !cleanId.includes('-')) {
+    return `Grup ${cleanId}`;
+  }
+
+  return `Grup ${String.fromCharCode(65 + index)}`;
 }
 
 /**
@@ -526,13 +535,20 @@ export function exportTournamentToPDF(tournament: Tournament): void {
   activeDivisions.forEach((div, divIndex) => {
     // Construct division entryMap
     const entryMap = new Map<string, Entry>();
-    (div.entries || []).forEach(e => {
-      if (e && typeof e === 'object') {
-        const id = (e as any).id ?? (e as any).entryId ?? (e as any).entry_id;
-        if (id) {
-          entryMap.set(String(id).trim(), e);
-        }
+    for (const entry of div.entries ?? []) {
+      if (entry && entry.id) {
+        entryMap.set(String(entry.id).trim(), entry);
       }
+    }
+
+    console.log('PDF_ENTRY_MAP_AUDIT', {
+      divisionId: div.id,
+      size: entryMap.size,
+      entries: Array.from(entryMap.entries()).map(([id, entry]) => ({
+        id,
+        name1: entry.name1,
+        name2: entry.name2
+      }))
     });
 
     if (divIndex > 0) {
@@ -605,13 +621,13 @@ export function exportTournamentToPDF(tournament: Tournament): void {
       doc.text('KLASEMEN FASE GRUP (ROUND ROBIN)', 15, currentY);
       currentY += 4;
 
-      div.groups.forEach((group) => {
+      div.groups.forEach((group, groupIdx) => {
         if (currentY > 230) {
           doc.addPage();
           currentY = 20;
         }
 
-        const groupTitle = getGroupName(group);
+        const groupTitle = getGroupName(group, groupIdx);
         const standings = calculateGroupStandings(group, div.roundRobinMatches || [], div.entries || [], div.settings?.playersQualifyingPerGroup || 2);
 
         doc.setFont('helvetica', 'bold');

@@ -1,7 +1,7 @@
 import { supabase, isSupabaseConfigured } from '../lib/supabaseClient';
 import { Tournament, Division, TournamentEvent, AgeGroup, Entry, Group, Match, Champions, KnockoutStage, KnockoutSlot, ServiceResult, OfficialPodium, PodiumEntry, PodiumPlacement, ThirdPlaceMode } from '../types';
 import { saveDivisionsToSupabase, loadDivisionsForTournament } from './divisionService';
-import { saveEntriesToSupabase, loadEntriesForTournament } from './entryService';
+import { saveEntriesToSupabase, loadEntriesForTournament, mapEntryFromRow } from './entryService';
 import { saveGroupsAndMembersToSupabase, loadGroupsForTournament } from './groupService';
 import { saveMatchesToSupabase, loadMatchesForTournament } from './matchService';
 import { saveKnockoutSlotsAndChampionsToSupabase, loadKnockoutSlotsAndChampionsForTournament } from './knockoutService';
@@ -492,18 +492,21 @@ export async function loadTournamentFromSupabase(tournamentId: string): Promise<
       name: ag.name
     }));
 
+    // Pre-group mapped entries by exact division_id
+    const entriesByDivision = new Map<string, Entry[]>();
+    for (const row of (entData || [])) {
+      const mapped = mapEntryFromRow(row);
+      const divId = String(row.division_id).trim();
+      const current = entriesByDivision.get(divId) ?? [];
+      current.push(mapped);
+      entriesByDivision.set(divId, current);
+    }
+
     // Reconstruct Active Divisions
     const activeDivisions: Division[] = (dbDivisions || []).map((div: any) => {
-      // Find division's entries
-      const divEntries: Entry[] = (entData || [])
-        .filter((e: any) => e.division_id === div.id)
-        .sort((a: any, b: any) => (a.seed || 0) - (b.seed || 0))
-        .map((e: any) => ({
-          id: e.id,
-          name1: e.player1_name,
-          name2: e.player2_name || undefined,
-          affiliation: e.club || undefined
-        }));
+      // Find division's entries by exact division_id match
+      const divEntries: Entry[] = (entriesByDivision.get(String(div.id).trim()) ?? [])
+        .sort((a, b) => (a.seed || 0) - (b.seed || 0));
 
       // Find division's groups
       const divGroups: Group[] = (gData || [])
@@ -885,6 +888,20 @@ export async function loadTournamentFromSupabase(tournamentId: string): Promise<
       cloudSaveStatus: saveStatus,
       cloudSyncedAt: new Date().toISOString()
     };
+
+    console.log(
+      'LOADED_DIVISION_ENTRIES_AUDIT',
+      reconstructedTournament.activeDivisions.map(div => ({
+        divisionId: div.id,
+        entryCount: div.entries?.length ?? 0,
+        entries: div.entries?.map(entry => ({
+          id: entry.id,
+          name1: entry.name1,
+          name2: entry.name2,
+          affiliation: entry.affiliation
+        }))
+      }))
+    );
 
     return reconstructedTournament;
   } catch (err) {

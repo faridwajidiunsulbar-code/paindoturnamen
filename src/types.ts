@@ -19,6 +19,7 @@ export interface Entry {
   name1: string;
   name2?: string; // empty for Single, filled for Double/Mix
   affiliation?: string; // Club/City (optional)
+  seed?: number;
 }
 
 export interface Group {

@@ -10,6 +10,16 @@ export const cleanEntryId = (id: string | null | undefined): string | null => {
 };
 
 // Name normalization & string utilities
+export function mapEntryFromRow(row: any): Entry {
+  return {
+    id: String(row.id),
+    name1: String(row.player1_name ?? '').trim(),
+    name2: String(row.player2_name ?? '').trim() || undefined,
+    affiliation: String(row.club ?? '').trim() || undefined,
+    seed: row.seed ?? undefined
+  };
+}
+
 export function normalizeName(name: string | null | undefined): string {
   if (!name) return '';
   return name.trim().replace(/\s+/g, ' ').toLowerCase();
@@ -246,10 +256,10 @@ export async function saveEntriesToSupabase(tournament: Tournament): Promise<Ser
             id: cleanedId,
             tournament_id: tournament.id,
             division_id: dbDivId,
-            player1_name: ent.name1,
-            player2_name: ent.name2 || null,
-            club: ent.affiliation || null,
-            seed: index + 1
+            player1_name: ent.name1.trim(),
+            player2_name: ent.name2?.trim() || null,
+            club: ent.affiliation?.trim() || null,
+            seed: ent.seed ?? index + 1
           });
         }
       });
