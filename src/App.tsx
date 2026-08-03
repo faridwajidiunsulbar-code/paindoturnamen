@@ -27,7 +27,7 @@ import DivisionRoundRobin from './components/DivisionRoundRobin';
 import DivisionKnockout from './components/DivisionKnockout';
 import TournamentClosureSection from './components/TournamentClosureSection';
 import { isTournamentReadOnly } from './utils/closureHelpers';
-import { exportTournamentToPDF } from './utils/pdfExport';
+import { exportTournamentToPDF, validateTournamentPdfExport, getTournamentReportType } from './utils/pdfExport';
 import { generateRoundRobinMatches } from './utils/tournamentHelpers';
 import { Match } from './types';
 
@@ -114,6 +114,7 @@ import {
   Download,
   CheckCircle2,
   AlertCircle,
+  AlertTriangle,
   Share2,
   Link,
   Trash2,
@@ -259,19 +260,40 @@ export default function App() {
     }
   }, [tournament]);
 
+  const [pdfConfirmModalOpen, setPdfConfirmModalOpen] = useState(false);
+  const [pdfConfirmReasons, setPdfConfirmReasons] = useState<string[]>([]);
+
   const handleExportPdf = () => {
-    const audit = tournament.activeDivisions.map(div => ({
-      id: div.id,
-      entryCount: div.entries?.length ?? 0,
-      entries: div.entries?.map(entry => ({
-        id: entry.id,
-        name1: entry.name1,
-        name2: entry.name2
-      }))
-    }));
+    const entriesByDivMap = new Map<string, Entry[]>();
+    (tournament.activeDivisions || []).forEach(div => {
+      const divId = String(div.id ?? '').trim();
+      entriesByDivMap.set(divId, div.entries || []);
+    });
 
-    console.log('PDF_BUTTON_STATE_AUDIT', audit);
+    const pdfInput = {
+      tournament,
+      divisions: tournament.activeDivisions,
+      entriesByDivision: entriesByDivMap
+    };
 
+    const validation = validateTournamentPdfExport(pdfInput);
+    if (!validation.canExportProgress) {
+      const errorMsg = validation.issues.filter(i => i.type === 'error').map(i => i.message).join('\n') || 'Data turnamen belum siap untuk di-ekspor.';
+      alert(errorMsg);
+      return;
+    }
+
+    const reportType = getTournamentReportType(tournament);
+
+    if (reportType.type === 'final') {
+      exportTournamentToPDF(pdfInput, { forceReportType: 'final' });
+    } else {
+      setPdfConfirmReasons(reportType.reasons);
+      setPdfConfirmModalOpen(true);
+    }
+  };
+
+  const handleConfirmProgressPdfExport = () => {
     const entriesByDivMap = new Map<string, Entry[]>();
     (tournament.activeDivisions || []).forEach(div => {
       const divId = String(div.id ?? '').trim();
@@ -281,8 +303,10 @@ export default function App() {
     exportTournamentToPDF({
       tournament,
       divisions: tournament.activeDivisions,
-      entriesByDivision: entriesByDivMap,
-    });
+      entriesByDivision: entriesByDivMap
+    }, { forceReportType: 'progress' });
+
+    setPdfConfirmModalOpen(false);
   };
 
   // Startup effect: Always preserve local saved state on page refresh.
@@ -1537,6 +1561,56 @@ export default function App() {
                 id="btn-keep-local-version"
               >
                 Tetap di Versi Lokal
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* PDF Progress Export Confirmation Modal */}
+      {pdfConfirmModalOpen && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fadeIn" id="pdf-progress-modal">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-4">
+            <div className="flex items-start gap-3.5">
+              <div className="p-3 bg-amber-100 text-amber-600 rounded-xl shrink-0 mt-0.5">
+                <AlertTriangle className="h-6 w-6" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-slate-900">Turnamen Belum Selesai</h3>
+                <p className="text-xs text-slate-600 mt-1 leading-relaxed">
+                  Masih terdapat pertandingan atau hasil akhir yang belum disahkan. Dokumen akan dibuat sebagai <strong>Laporan Progres Turnamen</strong>.
+                </p>
+              </div>
+            </div>
+
+            {pdfConfirmReasons.length > 0 && (
+              <div className="bg-slate-50 rounded-xl p-3 border border-slate-200 text-xs text-slate-600 max-h-36 overflow-y-auto space-y-1">
+                <div className="font-semibold text-slate-700">Catatan Progres:</div>
+                <ul className="list-disc list-inside space-y-0.5 text-[11px]">
+                  {pdfConfirmReasons.map((reason, idx) => (
+                    <li key={idx}>{reason}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setPdfConfirmModalOpen(false)}
+                className="px-4 py-2 rounded-xl border border-slate-300 text-slate-700 font-semibold text-xs hover:bg-slate-50 transition cursor-pointer"
+                id="btn-cancel-pdf-progress"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmProgressPdfExport}
+                className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-bold text-xs shadow-md transition flex items-center gap-1.5 cursor-pointer"
+                id="btn-confirm-pdf-progress"
+              >
+                <Download className="h-3.5 w-3.5" />
+                <span>Unduh Laporan Progres</span>
               </button>
             </div>
           </div>

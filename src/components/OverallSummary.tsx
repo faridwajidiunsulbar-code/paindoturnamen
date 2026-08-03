@@ -278,78 +278,100 @@ export default function OverallSummary({ tournament, onNavigateToDivision, isAdm
           </div>
           <div>
             <h3 className="text-base font-extrabold text-navy">Panduan & Informasi Sistem Turnamen</h3>
-            <p className="text-xs text-slate-450">Pelajari cara kerja sistem, perhitungan klasemen, dan kelulusan ke babak gugur.</p>
+            <p className="text-xs text-slate-450">Pelajari cara kerja sistem, aturan perhitungan klasemen, mekanisme kelolosan, dan pengelolaan babak gugur.</p>
           </div>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           
           {/* Card 1: Tentang Aplikasi */}
-          <div className="space-y-3 bg-softbg/40 p-5 rounded-2xl border border-slate-100" id="guide-about-app">
-            <div className="flex items-center gap-2 text-navy">
-              <Zap className="h-4 w-4 text-navy fill-neon" />
-              <h4 className="text-xs font-black uppercase tracking-wider">Tentang Aplikasi</h4>
+          <div className="space-y-3 bg-softbg/40 p-5 rounded-2xl border border-slate-100 flex flex-col justify-between" id="guide-about-app">
+            <div className="space-y-3">
+              <div className="flex items-center gap-2 text-navy">
+                <Zap className="h-4 w-4 text-navy fill-neon" />
+                <h4 className="text-xs font-black uppercase tracking-wider">Tentang Aplikasi</h4>
+              </div>
+              <p className="text-xs leading-relaxed text-slate-600">
+                PAINDO dirancang untuk membantu panitia mengelola turnamen pickleball secara terstruktur, mulai dari pendaftaran peserta hingga penetapan hasil akhir.
+              </p>
+              <p className="text-xs leading-relaxed text-slate-600">
+                Sistem mendukung pertandingan tunggal maupun ganda, pengelompokan berdasarkan kategori dan kelompok umur, pembagian grup, penyusunan jadwal, pencatatan hasil pertandingan, klasemen, serta babak gugur.
+              </p>
             </div>
-            <p className="text-xs leading-relaxed text-slate-600">
-              Aplikasi ini dirancang khusus untuk mengelola Turnamen <strong>Pickleball</strong> secara komprehensif dan profesional. 
-              Sistem mendukung pembentukan divisi pertandingan berdasarkan kategori (Tunggal/Ganda) dan kelompok umur secara fleksibel.
-            </p>
-            <ul className="text-[11px] text-slate-500 space-y-1 pl-4 list-disc">
-              <li>Pendaftaran praktis terintegrasi kolam pemain</li>
-              <li>Pembagian grup & pembuatan jadwal otomatis</li>
-              <li>Penyusunan klasemen real-time babak penyisihan</li>
-              <li>Generasi bagan babak gugur instan dan ekspor PDF</li>
+            <ul className="text-[11px] text-slate-500 space-y-1.5 pl-4 list-disc mt-2">
+              <li>Pendaftaran peserta dan pasangan per divisi</li>
+              <li>Pembagian grup secara otomatis maupun manual</li>
+              <li>Pembuatan jadwal round robin tanpa pertandingan ganda</li>
+              <li>Pencatatan skor, Walkover, dan koreksi oleh admin</li>
+              <li>Perhitungan klasemen dan penentuan peserta yang lolos</li>
+              <li>Penyusunan bracket knockout dan rekap hasil akhir</li>
+              <li>Penyimpanan data ke Cloud Database dan ekspor laporan PDF</li>
             </ul>
           </div>
 
-          {/* Card 2: Perhitungan Klasemen */}
-          <div className="space-y-3 bg-softbg/40 p-5 rounded-2xl border border-slate-100" id="guide-scoring-rules">
-            <div className="flex items-center gap-2 text-navy">
-              <Calculator className="h-4 w-4 text-navy" />
-              <h4 className="text-xs font-black uppercase tracking-wider">Kriteria & Tie-Breaker</h4>
+          {/* Card 2: Kriteria & Tie-Breaker */}
+          <div className="space-y-3 bg-softbg/40 p-5 rounded-2xl border border-slate-100 flex flex-col justify-between" id="guide-scoring-rules">
+            <div className="space-y-3">
+              <div className="flex items-center gap-2 text-navy">
+                <Calculator className="h-4 w-4 text-navy" />
+                <h4 className="text-xs font-black uppercase tracking-wider">Kriteria & Tie-Breaker</h4>
+              </div>
+              <p className="text-xs leading-relaxed text-slate-600">
+                Peringkat pada fase grup ditentukan menggunakan urutan kriteria berikut:
+              </p>
+              <ol className="text-[11px] text-slate-500 space-y-2 pl-4 list-decimal">
+                <li>
+                  <strong className="text-slate-700">Jumlah Menang:</strong> Tim dengan jumlah kemenangan lebih banyak menempati peringkat yang lebih tinggi.
+                </li>
+                <li>
+                  <strong className="text-slate-700">Poin Masuk:</strong> Jika jumlah kemenangan sama, tim dengan total poin yang dicetak lebih banyak berada di posisi lebih tinggi.
+                </li>
+                <li>
+                  <strong className="text-slate-700">Selisih Poin:</strong> Jika masih sama, digunakan selisih antara poin masuk dan poin kemasukan.
+                  <div className="mt-1 mb-0.5">
+                    <span className="font-mono text-[10px] bg-slate-100 px-2 py-0.5 rounded text-navy border border-slate-200 font-bold inline-block">
+                      Selisih Poin = Poin Masuk − Poin Kemasukan
+                    </span>
+                  </div>
+                </li>
+                <li>
+                  <strong className="text-slate-700">Head-to-Head (H2H):</strong> Digunakan hanya apabila tepat dua tim masih memiliki nilai yang sama pada jumlah menang, poin masuk, dan selisih poin. Tim yang memenangkan pertemuan langsung ditempatkan lebih tinggi.
+                </li>
+                <li>
+                  <strong className="text-slate-700">Keputusan Admin:</strong> Diperlukan apabila hasil masih seri, Head-to-Head tidak dapat diterapkan, atau terdapat tiga tim atau lebih dengan nilai yang sama. Keputusan admin wajib disertai alasan.
+                </li>
+              </ol>
             </div>
-            <p className="text-xs leading-relaxed text-slate-600">
-              Peringkat dalam penyisihan grup ditentukan secara berurutan berdasarkan kriteria baku berikut untuk menjamin keadilan:
-            </p>
-            <ol className="text-[11px] text-slate-500 space-y-1.5 pl-4 list-decimal">
-              <li>
-                <strong className="text-slate-700">Jumlah Menang:</strong> Dihitung berdasarkan jumlah pertandingan yang berhasil dimenangkan.
-              </li>
-              <li>
-                <strong className="text-slate-700">Selisih Poin:</strong> Total skor yang dicetak dikurangi skor kemasukan <span className="font-mono text-[10px] bg-slate-100 px-1 py-0.5 rounded text-navy">(Poin Masuk - Poin Keluar)</span>.
-              </li>
-              <li>
-                <strong className="text-slate-700">Head-to-Head (H2H):</strong> Berlaku eksklusif jika <strong>hanya terdapat tepat 2 tim</strong> yang memiliki jumlah kemenangan & selisih poin yang sama.
-              </li>
-              <li>
-                <strong className="text-slate-700">Poin Masuk Terbanyak:</strong> Tim dengan akumulasi poin mencetak angka tertinggi.
-              </li>
-              <li>
-                <strong className="text-slate-700">Keputusan Admin:</strong> Diperlukan intervensi manual jika seluruh parameter di atas sepenuhnya seri.
-              </li>
-            </ol>
           </div>
 
-          {/* Card 3: Kelulusan & Babak Gugur */}
-          <div className="space-y-3 bg-softbg/40 p-5 rounded-2xl border border-slate-100" id="guide-qualification">
-            <div className="flex items-center gap-2 text-navy">
-              <Trophy className="h-4 w-4 text-navy fill-neon" />
-              <h4 className="text-xs font-black uppercase tracking-wider">Mekanisme Kelulusan</h4>
+          {/* Card 3: Mekanisme Kelolosan */}
+          <div className="space-y-3 bg-softbg/40 p-5 rounded-2xl border border-slate-100 flex flex-col justify-between" id="guide-qualification">
+            <div className="space-y-3">
+              <div className="flex items-center gap-2 text-navy">
+                <Trophy className="h-4 w-4 text-navy fill-neon" />
+                <h4 className="text-xs font-black uppercase tracking-wider">Mekanisme Kelolosan</h4>
+              </div>
+              <p className="text-xs leading-relaxed text-slate-600">
+                Perpindahan peserta dari fase grup ke babak gugur ditentukan berdasarkan konfigurasi kelolosan pada setiap divisi.
+              </p>
+              <ul className="text-[11px] text-slate-500 space-y-2 pl-4 list-disc">
+                <li>
+                  <strong className="text-slate-700">Lolos Langsung:</strong> Peserta terbaik dari setiap grup lolos sesuai kuota yang telah ditentukan, misalnya dua peringkat teratas dari masing-masing grup.
+                </li>
+                <li>
+                  <strong className="text-slate-700">Wildcard:</strong> Jika jumlah peserta yang lolos langsung belum memenuhi kapasitas bracket, slot tambahan diberikan kepada peserta terbaik berikutnya berdasarkan perbandingan klasemen lintas grup.
+                </li>
+                <li>
+                  <strong className="text-slate-700">Penempatan Bracket:</strong> Peserta yang lolos ditempatkan ke dalam slot knockout berdasarkan hasil grup dan aturan silang grup agar peserta dari grup yang sama tidak langsung bertemu apabila konfigurasi memungkinkan.
+                </li>
+                <li>
+                  <strong className="text-slate-700">Walkover (WO):</strong> Kemenangan WO dapat dicatat dengan skor manual yang sah, misalnya 11–0, 15–0, atau 21–0. Alasan WO wajib dicantumkan.
+                </li>
+                <li>
+                  <strong className="text-slate-700">Perebutan Juara 3:</strong> Penentuan peringkat ketiga mengikuti konfigurasi divisi: 1. pertandingan perebutan Juara 3; 2. dua peraih Juara 3 bersama; 3. atau tanpa penetapan Juara 3.
+                </li>
+              </ul>
             </div>
-            <p className="text-xs leading-relaxed text-slate-600">
-              Transisi dari babak penyisihan (grup) menuju ke babak gugur (Knockout) diatur melalui parameter berikut:
-            </p>
-            <ul className="text-[11px] text-slate-500 space-y-1.5 pl-4 list-disc">
-              <li>
-                <strong className="text-slate-700">Direct Qualifier (Lolos Langsung):</strong> Berdasarkan kuota kelulusan per grup (misal: Top 2 terbaik dari setiap grup).
-              </li>
-              <li>
-                <strong className="text-slate-700">Wildcard (Kuota Tambahan):</strong> Jika total tim yang lolos langsung kurang dari kapasitas ukuran bagan (bracket 4, 8, atau 16), sistem akan memilih tim berperingkat terbaik berikutnya dari lintas grup.
-              </li>
-              <li>
-                <strong className="text-slate-700">Aturan Win by 2 & WO:</strong> Skor target dapat menggunakan aturan <em>Win by 2</em>. Untuk kemenangan WO (Walkover), tim pemenang mendapat poin penuh sesuai target skor (misal: 11-0 atau 15-0).
-              </li>
-            </ul>
           </div>
 
         </div>
@@ -357,12 +379,15 @@ export default function OverallSummary({ tournament, onNavigateToDivision, isAdm
         {/* Hal Penting Lainnya Banner */}
         <div className="bg-amber-50 border border-amber-200/60 rounded-2xl p-4 flex gap-3 text-amber-900" id="guide-important-notes">
           <ShieldAlert className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
-          <div className="space-y-1">
+          <div className="space-y-1.5">
             <h5 className="text-xs font-black uppercase tracking-wider text-amber-800">Catatan Penting bagi Panitia</h5>
-            <ul className="text-[11px] text-amber-700 space-y-1 list-disc pl-4">
-              <li>Pastikan semua pertandingan dalam satu grup diselesaikan dan diinput skornya sebelum melakukan konfirmasi kelulusan ke babak gugur.</li>
-              <li>Mengubah pendaftaran peserta atau pembagian grup setelah jadwal pertandingan digenerate akan me-reset data pertandingan grup tersebut.</li>
-              <li>Pada babak gugur, pemenang babak Semifinal akan melaju secara otomatis ke partai <strong>Final</strong>, sedangkan tim yang kalah otomatis melaju ke perebutan <strong>Juara 3</strong>.</li>
+            <ul className="text-[11px] text-amber-700 space-y-1.5 list-disc pl-4">
+              <li>Pastikan seluruh pertandingan dalam grup telah selesai dan hasilnya sudah tersimpan sebelum mengonfirmasi kelolosan ke babak gugur.</li>
+              <li>Perubahan peserta, pasangan, atau pembagian grup dapat dibatasi apabila jadwal, skor, bracket, atau hasil akhir sudah terbentuk.</li>
+              <li>Koreksi setelah pertandingan berjalan harus dilakukan melalui jalur admin dan wajib disertai alasan.</li>
+              <li>Jangan membuat ulang jadwal grup apabila sudah terdapat skor, kecuali melalui fitur koreksi atau reset darurat yang tersedia bagi admin.</li>
+              <li>Pemenang semifinal maju ke Final. Peserta yang kalah mengikuti mekanisme Juara 3 sesuai konfigurasi divisi.</li>
+              <li>Setelah podium disahkan dan turnamen ditutup, data menjadi arsip hanya-baca. Pembukaan kembali turnamen harus dilakukan oleh admin dengan alasan yang tercatat.</li>
             </ul>
           </div>
         </div>

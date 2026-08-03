@@ -467,22 +467,26 @@ export async function loadTournamentFromSupabase(tournamentId: string): Promise<
     const entResult = await loadEntriesForTournament(tournamentId);
     const entData = entResult.success ? entResult.data : [];
 
-    console.log('CLOUD_ENTRY_ROWS_RAW', (entData || []).map((row: any) => ({
-      id: row.id,
-      division_id: row.division_id,
-      player1_name: row.player1_name,
-      player2_name: row.player2_name,
-      club: row.club
-    })));
+    if ((import.meta as any).env?.DEV) {
+      console.log('CLOUD_ENTRY_ROWS_RAW', (entData || []).map((row: any) => ({
+        id: row.id,
+        division_id: row.division_id,
+        player1_name: row.player1_name,
+        player2_name: row.player2_name,
+        club: row.club
+      })));
+    }
 
     const mappedEntriesList = (entData || []).map((row: any) => mapEntryFromRow(row));
 
-    console.log('CLOUD_ENTRIES_MAPPED', mappedEntriesList.map((entry: any) => ({
-      id: entry.id,
-      name1: entry.name1,
-      name2: entry.name2,
-      affiliation: entry.affiliation
-    })));
+    if ((import.meta as any).env?.DEV) {
+      console.log('CLOUD_ENTRIES_MAPPED', mappedEntriesList.map((entry: any) => ({
+        id: entry.id,
+        name1: entry.name1,
+        name2: entry.name2,
+        affiliation: entry.affiliation
+      })));
+    }
 
     // 4. Load Groups Domain
     const grpResult = await loadGroupsForTournament(tournamentId);
@@ -906,19 +910,21 @@ export async function loadTournamentFromSupabase(tournamentId: string): Promise<
       cloudSyncedAt: new Date().toISOString()
     };
 
-    console.log(
-      'LOADED_DIVISION_ENTRIES_AUDIT',
-      reconstructedTournament.activeDivisions.map(div => ({
-        divisionId: div.id,
-        entryCount: div.entries?.length ?? 0,
-        entries: div.entries?.map(entry => ({
-          id: entry.id,
-          name1: entry.name1,
-          name2: entry.name2,
-          affiliation: entry.affiliation
+    if ((import.meta as any).env?.DEV) {
+      console.log(
+        'LOADED_DIVISION_ENTRIES_AUDIT',
+        reconstructedTournament.activeDivisions.map(div => ({
+          divisionId: div.id,
+          entryCount: div.entries?.length ?? 0,
+          entries: div.entries?.map(entry => ({
+            id: entry.id,
+            name1: entry.name1,
+            name2: entry.name2,
+            affiliation: entry.affiliation
+          }))
         }))
-      }))
-    );
+      );
+    }
 
     return reconstructedTournament;
   } catch (err) {

@@ -301,10 +301,182 @@ export function getGroupName(group: Group | { id?: string; name?: string }, inde
 /**
  * Helper to format match score safely.
  */
+export function displayOrDash(value: unknown): string {
+  if (value === null || value === undefined) return '-';
+  const text = String(value).trim();
+  if (!text || text === 'null' || text === 'undefined') return '-';
+  return text;
+}
+
+export interface TournamentReportType {
+  type: 'progress' | 'final';
+  title: string;
+  sublabel: string;
+  reasons: string[];
+}
+
+export function getTournamentReportType(tournament: Tournament): TournamentReportType {
+  const reasons: string[] = [];
+  const activeDivisions = tournament.activeDivisions || [];
+
+  if (activeDivisions.length === 0) {
+    reasons.push('Turnamen belum memiliki divisi aktif.');
+  }
+
+  activeDivisions.forEach(div => {
+    const divName = `${div.eventName || ''} ${div.ageGroupName || ''}`.trim() || div.id;
+
+    // 1. Group Stage Check
+    const rrMatches = div.roundRobinMatches || [];
+    if (rrMatches.length === 0 && (div.groups || []).length > 0) {
+      reasons.push(`Divisi ${divName}: Jadwal fase grup belum dibentuk.`);
+    }
+
+    const unplayedRR = rrMatches.filter(m => m.status !== 'selesai' && m.status !== 'walkover');
+    if (unplayedRR.length > 0) {
+      reasons.push(`Divisi ${divName}: Masih terdapat ${unplayedRR.length} pertandingan fase grup yang belum selesai.`);
+    }
+
+    // 2. Knockout Stage Check
+    const koStage = div.knockoutStage;
+    if (!koStage || !koStage.matches || koStage.matches.length === 0) {
+      reasons.push(`Divisi ${divName}: Babak gugur belum dibuat/selesai.`);
+    } else {
+      const thirdPlaceMode = div.settings?.thirdPlaceMode || (div.settings?.thirdPlaceEnabled === false ? 'none' : 'playoff');
+      const unplayedKO = koStage.matches.filter(m => {
+        if (m.isBronzeMatch && (thirdPlaceMode === 'shared_bronze' || thirdPlaceMode === 'none')) {
+          return false;
+        }
+        if (!m.entryId1 && !m.entryId2 && m.status === 'belum_dimainkan') {
+          return false;
+        }
+        return m.status !== 'selesai' && m.status !== 'walkover';
+      });
+
+      if (unplayedKO.length > 0) {
+        reasons.push(`Divisi ${divName}: Masih terdapat ${unplayedKO.length} pertandingan babak gugur yang belum selesai.`);
+      }
+
+      const finalMatch = koStage.matches.find(m => m.roundName === 'Final' || (!m.nextMatchNum && !m.isBronzeMatch));
+      if (!finalMatch || (finalMatch.status !== 'selesai' && finalMatch.status !== 'walkover') || !finalMatch.winnerId) {
+        reasons.push(`Divisi ${divName}: Pertandingan Final belum selesai.`);
+      }
+    }
+
+    // 3. Official Podium Check
+    const isPodiumOfficial = !!div.podiumOfficial && !!div.officialPodium;
+    if (!isPodiumOfficial) {
+      reasons.push(`Divisi ${divName}: Podium/hasil resmi belum disahkan oleh admin.`);
+    }
+  });
+
+  if (reasons.length === 0) {
+    return {
+      type: 'final',
+      title: 'LAPORAN HASIL TURNAMEN',
+      sublabel: 'Status Laporan: Final',
+      reasons: []
+    };
+  }
+
+  return {
+    type: 'progress',
+    title: 'LAPORAN PROGRES TURNAMEN',
+    sublabel: 'Status Laporan: Sementara',
+    reasons
+  };
+}
+
+export interface PdfValidationIssue {
+  type: 'error' | 'warning';
+  divisionId?: string;
+  message: string;
+}
+
+export interface PdfValidationResult {
+  canExportProgress: boolean;
+  canExportFinal: boolean;
+  issues: PdfValidationIssue[];
+}
+
+export function validateTournamentPdfExport(input: Tournament | TournamentPdfInput): PdfValidationResult {
+  const isInputObj = typeof input === 'object' && input !== null && 'tournament' in input;
+  const tournament = isInputObj ? (input as TournamentPdfInput).tournament : (input as Tournament);
+  const inputDivisions = isInputObj && (input as TournamentPdfInput).divisions ? (input as TournamentPdfInput).divisions! : (tournament.activeDivisions || []);
+  const inputEntriesByDiv = isInputObj ? (input as TournamentPdfInput).entriesByDivision : undefined;
+
+  const issues: PdfValidationIssue[] = [];
+  const activeDivisions = inputDivisions || [];
+
+  if (activeDivisions.length === 0) {
+    issues.push({
+      type: 'error',
+      message: 'Tidak ada divisi aktif dalam turnamen.'
+    });
+  }
+
+  const expectedEntryCount = activeDivisions.reduce((total, div) => {
+    return total + (div.groups ?? []).reduce((sum, group) => sum + (group.entryIds?.length || 0), 0);
+  }, 0);
+
+  const loadedEntryCount = activeDivisions.reduce((total, div) => {
+    const divId = String(div.id ?? '').trim();
+    let count = div.entries?.length ?? 0;
+    if (inputEntriesByDiv) {
+      const fromInput = inputEntriesByDiv instanceof Map ? inputEntriesByDiv.get(divId) : (inputEntriesByDiv as Record<string, Entry[]>)[divId];
+      if (fromInput && fromInput.length > 0) count = fromInput.length;
+    }
+    return total + count;
+  }, 0);
+
+  if (expectedEntryCount > 0 && loadedEntryCount === 0) {
+    issues.push({
+      type: 'error',
+      message: 'Data peserta belum selesai dimuat dari Cloud Database. Muat ulang data sebelum membuat laporan.'
+    });
+  }
+
+  const reportType = getTournamentReportType(tournament);
+  const isFinal = reportType.type === 'final';
+  const hasBlockingError = issues.some(i => i.type === 'error');
+
+  return {
+    canExportProgress: !hasBlockingError,
+    canExportFinal: !hasBlockingError && isFinal,
+    issues,
+  };
+}
+
+function isGroupQualificationConfirmed(group: Group, division: Division): boolean {
+  if (division.knockoutStage && division.knockoutStage.matches && division.knockoutStage.matches.length > 0) {
+    return true;
+  }
+  const groupMatches = (division.roundRobinMatches || []).filter(m => {
+    if (group.name && m.groupName) return String(m.groupName).trim() === String(group.name).trim();
+    return false;
+  });
+
+  if (groupMatches.length === 0) return false;
+  return groupMatches.every(m => m.status === 'selesai' || m.status === 'walkover');
+}
+
+function formatMatchStatus(status?: string): string {
+  if (status === 'selesai' || status === 'completed') return 'Selesai';
+  if (status === 'walkover') return 'Walkover (W/O)';
+  return 'Belum Dimainkan';
+}
+
 export function formatScore(m: Match): string {
-  if (m.status === 'belum_dimainkan') return 'Belum Dimainkan';
-  if (m.status === 'walkover') return 'W/O';
-  return `${m.score1 ?? 0} - ${m.score2 ?? 0}`;
+  if (m.status === 'walkover') {
+    if (m.score1 !== undefined && m.score1 !== null && m.score2 !== undefined && m.score2 !== null && (m.score1 > 0 || m.score2 > 0)) {
+      return `${m.score1} - ${m.score2}`;
+    }
+    return 'W/O';
+  }
+  if (m.status === 'selesai') {
+    return `${m.score1 ?? 0} - ${m.score2 ?? 0}`;
+  }
+  return '-';
 }
 
 /**
@@ -375,10 +547,10 @@ export interface TournamentPdfInput {
   entriesByDivision?: Map<string, Entry[]> | Record<string, Entry[]>;
 }
 
-export function exportTournamentToPDF(input: Tournament | TournamentPdfInput): void {
-  // --- SECTION C: RUNTIME MARKER ---
-  console.warn('PDF_CANONICAL_RESOLVER_V3_ACTIVE');
-
+export function exportTournamentToPDF(
+  input: Tournament | TournamentPdfInput,
+  options?: { forceReportType?: 'final' | 'progress' }
+): void {
   const isInputObj = typeof input === 'object' && input !== null && 'tournament' in input;
   const tournament = isInputObj ? (input as TournamentPdfInput).tournament : (input as Tournament);
   const inputDivisions = isInputObj && (input as TournamentPdfInput).divisions ? (input as TournamentPdfInput).divisions! : (tournament.activeDivisions || []);
@@ -410,50 +582,27 @@ export function exportTournamentToPDF(input: Tournament | TournamentPdfInput): v
     return;
   }
 
-  // --- SECTION A: AUDIT RUNTIME LOGGING ---
-  console.debug('PDF_RUNTIME_TOURNAMENT', tournament);
+  if ((import.meta as any).env?.DEV) {
+    console.debug('PDF_RUNTIME_TOURNAMENT', tournament);
+    console.debug(
+      'PDF_RUNTIME_DIVISIONS',
+      tournament.activeDivisions?.map(d => ({
+        id: d.id,
+        name: (d as any).name,
+        eventName: d.eventName,
+        ageGroupName: d.ageGroupName,
+        matchTypeName: (d as any).matchTypeName,
+        entries: d.entries,
+        groups: d.groups,
+        officialPodium: d.officialPodium
+      }))
+    );
+  }
 
-  console.debug(
-    'PDF_RUNTIME_DIVISIONS',
-    tournament.activeDivisions?.map(d => ({
-      id: d.id,
-      name: (d as any).name,
-      eventName: d.eventName,
-      ageGroupName: d.ageGroupName,
-      matchTypeName: (d as any).matchTypeName,
-      entries: d.entries,
-      groups: d.groups,
-      officialPodium: d.officialPodium
-    }))
-  );
-
-  console.debug(
-    'PDF_RUNTIME_FIRST_ENTRY',
-    tournament.activeDivisions?.[0]?.entries?.[0]
-  );
-
-  console.debug(
-    'PDF_RUNTIME_FIRST_STANDING',
-    tournament.activeDivisions?.[0]?.groups?.[0]
-      ? calculateGroupStandings(
-          tournament.activeDivisions[0].groups[0],
-          tournament.activeDivisions[0].roundRobinMatches || [],
-          tournament.activeDivisions[0].entries || [],
-          2
-        )?.[0]
-      : null
-  );
-
-  console.debug(
-    'PDF_RUNTIME_FIRST_MATCH',
-    tournament.activeDivisions?.[0]?.roundRobinMatches?.[0] ||
-      tournament.activeDivisions?.[0]?.knockoutStage?.matches?.[0]
-  );
-
-  console.debug(
-    'PDF_RUNTIME_OFFICIAL_PODIUM',
-    tournament.activeDivisions?.[0]?.officialPodium
-  );
+  const reportType = getTournamentReportType(tournament);
+  const effectiveType = options?.forceReportType || reportType.type;
+  const effectiveTitle = effectiveType === 'final' ? 'LAPORAN HASIL TURNAMEN' : 'LAPORAN PROGRES TURNAMEN';
+  const effectiveSublabel = effectiveType === 'final' ? 'Status Laporan: Final' : 'Status Laporan: Sementara';
 
   const integrityWarnings: string[] = [];
   let totalRequestedCount = 0;
@@ -500,8 +649,8 @@ export function exportTournamentToPDF(input: Tournament | TournamentPdfInput): v
     });
   }
 
-  const sanitizedTitle = name?.trim() ? sanitizePdfText(name) : 'Nama Turnamen';
-  const sanitizedLocation = location?.trim() ? sanitizePdfText(location) : '-';
+  const sanitizedTitle = displayOrDash(name !== 'Belum Ada Turnamen' ? name : 'Turnamen Pickleball');
+  const sanitizedLocation = displayOrDash(location);
 
   let formattedDate = '-';
   if (date) {
@@ -510,10 +659,10 @@ export function exportTournamentToPDF(input: Tournament | TournamentPdfInput): v
       if (!isNaN(d.getTime())) {
         formattedDate = d.toLocaleDateString('id-ID', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
       } else {
-        formattedDate = sanitizePdfText(date) || '-';
+        formattedDate = displayOrDash(date);
       }
     } catch {
-      formattedDate = sanitizePdfText(date) || '-';
+      formattedDate = displayOrDash(date);
     }
   }
 
@@ -523,20 +672,20 @@ export function exportTournamentToPDF(input: Tournament | TournamentPdfInput): v
 
   // --- FIRST PAGE / MAIN HEADER ---
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(22);
+  doc.setFontSize(20);
   doc.setTextColor(titleColor[0], titleColor[1], titleColor[2]);
-  doc.text('LAPORAN HASIL TURNAMEN', 15, 20);
+  doc.text(effectiveTitle, 15, 20);
 
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(14);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(13);
   doc.setTextColor(accentColor[0], accentColor[1], accentColor[2]);
   doc.text(sanitizedTitle, 15, 28);
 
-  // Diagnostic badge line
+  // Status Badge Sublabel
   doc.setFont('helvetica', 'italic');
-  doc.setFontSize(8);
+  doc.setFontSize(8.5);
   doc.setTextColor(100, 116, 139);
-  doc.text('PDF Engine: Canonical Resolver V3', 140, 20);
+  doc.text(effectiveSublabel, 140, 20);
 
   // Metadata Block
   doc.setDrawColor(241, 245, 249); // Slate-100
@@ -552,7 +701,7 @@ export function exportTournamentToPDF(input: Tournament | TournamentPdfInput): v
   doc.setFont('helvetica', 'normal');
   doc.setTextColor(15, 23, 42);
   doc.text(sanitizePdfText(formattedDate), 65, 41);
-  doc.text(sanitizedLocation, 65, 49);
+  doc.text(sanitizePdfText(sanitizedLocation), 65, 49);
 
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(9);
@@ -591,34 +740,12 @@ export function exportTournamentToPDF(input: Tournament | TournamentPdfInput): v
       }
     }
 
-    console.log('PDF_ENTRY_MAP_AUDIT', {
-      divisionId: div.id,
-      size: entryMap.size,
-      entries: Array.from(entryMap.entries()).map(([id, entry]) => ({
-        id,
-        name1: entry.name1,
-        name2: entry.name2
-      }))
-    });
-
-    console.log('PDF_ENTRY_LOOKUP_FINAL', {
-      divisionId,
-      mapSize: entryMap.size,
-      coachNadir: entryMap.get('ent-rnd-10-1785683219728'),
-      haedar: entryMap.get('ent-rnd-8-1785683219728'),
-      ustadzMul: entryMap.get('ent-rnd-0-1785683219728'),
-      alif: entryMap.get('ent-rnd-4-1785683219728')
-    });
-
     if (divIndex > 0) {
       doc.addPage();
       currentY = 20;
     }
 
     const divTitle = getDivisionTitle(div);
-
-    // --- REQUIREMENT D LOGGING ---
-    console.log('FINAL_DIVISION_TITLE_BEFORE_PDF', divTitle);
 
     // Division Title Bar
     doc.setFillColor(241, 245, 249); // Light Gray background
@@ -644,9 +771,6 @@ export function exportTournamentToPDF(input: Tournament | TournamentPdfInput): v
 
     const podiumBody = getPodiumRows(div, entryMap, globalEntryMap, integrityWarnings, trackLookup);
     const championsHead = ['Podium', 'Nama Tim / Pemain', 'Afiliasi / Klub'];
-
-    // --- REQUIREMENT D LOGGING ---
-    console.log('FINAL_PODIUM_ROWS_BEFORE_PDF', podiumBody);
 
     autoTable(doc, {
       startY: currentY,
@@ -688,6 +812,7 @@ export function exportTournamentToPDF(input: Tournament | TournamentPdfInput): v
 
         const groupTitle = getGroupName(group, groupIdx);
         const standings = calculateGroupStandings(group, div.roundRobinMatches || [], div.entries || [], div.settings?.playersQualifyingPerGroup || 2);
+        const isQualConfirmed = isGroupQualificationConfirmed(group, div);
 
         doc.setFont('helvetica', 'bold');
         doc.setFontSize(9);
@@ -703,6 +828,7 @@ export function exportTournamentToPDF(input: Tournament | TournamentPdfInput): v
           if (!entry && rowKey) {
             integrityWarnings.push(`Klasemen ${groupTitle}: entryId tidak ditemukan: ${rowKey}`);
           }
+          const qualifyStatus = isQualConfirmed && row.rank <= (div.settings?.playersQualifyingPerGroup || 2) ? 'Qualify' : '-';
           return [
             row.rank.toString(),
             nameStr,
@@ -711,12 +837,9 @@ export function exportTournamentToPDF(input: Tournament | TournamentPdfInput): v
             row.lost.toString(),
             `${row.pointsFor}-${row.pointsAgainst}`,
             row.pointDifference > 0 ? `+${row.pointDifference}` : row.pointDifference.toString(),
-            row.rank <= (div.settings?.playersQualifyingPerGroup || 2) ? 'Qualify' : '-'
+            qualifyStatus
           ];
         });
-
-        // --- REQUIREMENT D LOGGING ---
-        console.log('FINAL_STANDINGS_ROWS_BEFORE_PDF', standingsBody);
 
         autoTable(doc, {
           startY: currentY,
@@ -802,7 +925,7 @@ export function exportTournamentToPDF(input: Tournament | TournamentPdfInput): v
         team2: res2.nameStr,
         score: formatScore(m),
         winner: winnerStr,
-        status: m.status === 'selesai' ? 'Selesai' : (m.status === 'walkover' ? 'Walkover (W/O)' : 'Belum Dimainkan')
+        status: formatMatchStatus(m.status)
       });
     });
 
@@ -845,7 +968,7 @@ export function exportTournamentToPDF(input: Tournament | TournamentPdfInput): v
         team2: res2.nameStr,
         score: formatScore(m),
         winner: winnerStr,
-        status: m.status === 'selesai' ? 'Selesai' : (m.status === 'walkover' ? 'Walkover (W/O)' : 'Belum Dimainkan')
+        status: formatMatchStatus(m.status)
       });
     });
 
@@ -866,9 +989,6 @@ export function exportTournamentToPDF(input: Tournament | TournamentPdfInput): v
         m.winner,
         m.status
       ]);
-
-      // --- REQUIREMENT D LOGGING ---
-      console.log('FINAL_MATCH_ROWS_BEFORE_PDF', matchesBody);
 
       autoTable(doc, {
         startY: currentY,
@@ -895,24 +1015,8 @@ export function exportTournamentToPDF(input: Tournament | TournamentPdfInput): v
     }
   });
 
-  // Log integrity warnings if any
-  if (integrityWarnings.length > 0) {
+  if (integrityWarnings.length > 0 && (import.meta as any).env?.DEV) {
     console.warn('PDF DATA INTEGRITY WARNINGS:', integrityWarnings);
-  }
-
-  // --- SECTION K: FAIL-LOUD IN DEVELOPMENT ---
-  if (totalRequestedCount > 0) {
-    const missingRatio = missingCount / totalRequestedCount;
-    if (missingRatio > 0.2) {
-      const isDev = process.env.NODE_ENV !== 'production' || (import.meta as any).env?.DEV;
-      if (isDev) {
-        throw new Error(
-          `PDF entry resolver gagal: ${missingCount}/${totalRequestedCount} peserta tidak ditemukan`
-        );
-      } else {
-        console.warn(`PDF entry resolver warning: ${missingCount}/${totalRequestedCount} peserta tidak ditemukan.`);
-      }
-    }
   }
 
   // --- FINAL PASS: DRAW HEADER ACCENT AND FOOTER WITH SINGLE SOURCE OF TRUTH PAGE NUMBERS ---
@@ -935,13 +1039,24 @@ export function exportTournamentToPDF(input: Tournament | TournamentPdfInput): v
     doc.setLineWidth(0.2);
     doc.line(15, 282, 195, 282);
 
-    // Footer text
-    doc.text(`${sanitizedTitle}${formattedDate !== '-' ? ` - ${sanitizePdfText(formattedDate)}` : ''}`, 15, 287);
+    // Footer left text
+    const footerLeft = [
+      sanitizedTitle !== '-' ? sanitizedTitle : '',
+      formattedDate !== '-' ? formattedDate : ''
+    ].filter(Boolean).join(' - ');
+
+    if (footerLeft) {
+      doc.text(sanitizePdfText(footerLeft), 15, 287);
+    }
+
+    // Page number on right
     const pageStr = `Halaman ${i} dari ${totalPages}`;
     doc.text(pageStr, 195, 287, { align: 'right' });
   }
 
   // Save the PDF
-  const filename = `Laporan_Turnamen_${sanitizedTitle.replace(/[^a-zA-Z0-9]/g, '_') || 'Pickleball'}.pdf`;
+  const prefix = effectiveType === 'final' ? 'Laporan_Hasil_Turnamen' : 'Laporan_Progres_Turnamen';
+  const cleanTitleStr = sanitizedTitle.replace(/[^a-zA-Z0-9]/g, '_').replace(/_+/g, '_').trim() || 'Pickleball';
+  const filename = `${prefix}_${cleanTitleStr}.pdf`;
   doc.save(filename);
 }
