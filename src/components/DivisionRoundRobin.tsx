@@ -401,8 +401,35 @@ export default function DivisionRoundRobin({ division, onUpdateDivision, isAdmin
     setScoringMatch(match);
     const initialWinner = match.winnerId || match.entryId1 || '';
     setWalkoverWinner(initialWinner);
-    setWoReasonCategory(match.notes ? 'lainnya' : 'cedera');
-    setWoCustomReason(match.notes || '');
+
+    const rawNotes = String(match.notes ?? (match as any).walkoverReason ?? (match as any).woReason ?? (match as any).reason ?? '').trim();
+    let cleanNotes = rawNotes;
+    if (cleanNotes.startsWith('Walkover (WO) - ')) {
+      cleanNotes = cleanNotes.slice('Walkover (WO) - '.length).trim();
+    } else if (cleanNotes.startsWith('Koreksi Admin (WO) - ')) {
+      cleanNotes = cleanNotes.slice('Koreksi Admin (WO) - '.length).trim();
+    } else if (cleanNotes.startsWith('Koreksi Admin - ')) {
+      cleanNotes = cleanNotes.slice('Koreksi Admin - '.length).trim();
+    }
+
+    const presetEntries: [string, string][] = [
+      ['cedera', 'Cedera Peserta'],
+      ['mengundurkan_diri', 'Mengundurkan Diri Peserta'],
+      ['diskualifikasi', 'Diskualifikasi oleh Panitia'],
+      ['ketidakhadiran', 'Ketidakhadiran / Walkover (WO)'],
+      ['gangguan_teknis', 'Gangguan Teknis Lapangan'],
+      ['cuaca', 'Kondisi Cuaca'],
+      ['keputusan_panitia', 'Keputusan Panitia / Force Majeure']
+    ];
+
+    const matchedPreset = presetEntries.find(([_, label]) => label.toLowerCase() === cleanNotes.toLowerCase() || label.toLowerCase() === rawNotes.toLowerCase());
+    if (matchedPreset) {
+      setWoReasonCategory(matchedPreset[0]);
+      setWoCustomReason(cleanNotes);
+    } else {
+      setWoReasonCategory(cleanNotes ? 'lainnya' : 'cedera');
+      setWoCustomReason(cleanNotes);
+    }
 
     const initialStatus = match.status === 'belum_dimainkan' ? 'selesai' : match.status;
     setMatchStatus(initialStatus);
@@ -475,6 +502,20 @@ export default function DivisionRoundRobin({ division, onUpdateDivision, isAdmin
     lId: string | null,
     notes?: string
   ) => {
+    if ((import.meta as any).env?.DEV && scoringMatch) {
+      console.log('WO_MATCH_9_AUDIT [2. After State Updated]', {
+        id: scoringMatch.id,
+        matchNo: scoringMatch.matchNum,
+        groupId: scoringMatch.groupName,
+        status,
+        isWalkover: status === 'walkover',
+        notes,
+        walkoverReason: undefined,
+        woReason: undefined,
+        reason: undefined
+      });
+    }
+
     const updatedMatches = roundRobinMatches.map(m => {
       if (m.id === scoringMatch!.id) {
         return {
@@ -586,7 +627,9 @@ export default function DivisionRoundRobin({ division, onUpdateDivision, isAdmin
             keputusan_panitia: 'Keputusan Panitia / Force Majeure'
           }[woReasonCategory] || woReasonCategory;
 
-      if (!reasonText) {
+      const normalizedReason = reasonText.trim();
+
+      if (!normalizedReason) {
         setShowAlert({
           title: 'Alasan WO Wajib Diisi ⚠️',
           message: 'Silakan tuliskan alasan rincian Walkover / Force Majeure.'
@@ -594,10 +637,24 @@ export default function DivisionRoundRobin({ division, onUpdateDivision, isAdmin
         return;
       }
 
+      if ((import.meta as any).env?.DEV && scoringMatch) {
+        console.log('WO_MATCH_9_AUDIT [1. Before Form Saved]', {
+          id: scoringMatch.id,
+          matchNo: scoringMatch.matchNum,
+          groupId: scoringMatch.groupName,
+          status: 'walkover',
+          isWalkover: true,
+          notes: normalizedReason,
+          walkoverReason: undefined,
+          woReason: undefined,
+          reason: undefined
+        });
+      }
+
       finalScore1 = s1Num;
       finalScore2 = s2Num;
       winnerId = walkoverWinner;
-      finalNotes = `Walkover (WO) - ${reasonText}`;
+      finalNotes = normalizedReason;
 
       executeCommitScore(finalScore1, finalScore2, 'walkover', winnerId, loserId, finalNotes);
     } else {

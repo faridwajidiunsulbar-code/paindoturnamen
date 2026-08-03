@@ -589,13 +589,17 @@ export async function loadTournamentFromSupabase(tournamentId: string): Promise<
           divisionId: m.division_id,
           groupName: m.round || undefined,
           type: 'ROUND_ROBIN',
+          matchNum: m.match_no,
           entryId1: m.entry_a_id,
           entryId2: m.entry_b_id,
           score1: m.score_a,
           score2: m.score_b,
           status: m.status === 'completed' ? 'selesai' : (m.status === 'walkover' ? 'walkover' : 'belum_dimainkan'),
           winnerId: m.winner_entry_id,
-          loserId: m.loser_entry_id
+          loserId: m.loser_entry_id,
+          notes: (m.notes ?? m.walkover_reason ?? m.walkoverReason ?? m.wo_reason ?? m.woReason ?? m.reason ?? null)
+            ? String(m.notes ?? m.walkover_reason ?? m.walkoverReason ?? m.wo_reason ?? m.woReason ?? m.reason).trim()
+            : undefined
         }));
 
       // Knockout Stage Matches
@@ -626,7 +630,9 @@ export async function loadTournamentFromSupabase(tournamentId: string): Promise<
             loserId: m.loser_entry_id,
             matchNum: m.match_no,
             nextMatchNum,
-            notes: m.notes || undefined
+            notes: (m.notes ?? m.walkover_reason ?? m.walkoverReason ?? m.wo_reason ?? m.woReason ?? m.reason ?? null)
+              ? String(m.notes ?? m.walkover_reason ?? m.walkoverReason ?? m.wo_reason ?? m.woReason ?? m.reason).trim()
+              : undefined
           };
         });
 
@@ -924,6 +930,24 @@ export async function loadTournamentFromSupabase(tournamentId: string): Promise<
           }))
         }))
       );
+
+      reconstructedTournament.activeDivisions.forEach(div => {
+        [...(div.roundRobinMatches || []), ...((div.knockoutStage?.matches) || [])].forEach(m => {
+          if (m.status === 'walkover' || m.matchNum === 9 || String(m.id).includes('9')) {
+            console.log('WO_MATCH_9_AUDIT [4. After Reload Cloud]', {
+              id: m.id,
+              matchNo: m.matchNum,
+              groupId: m.groupName,
+              status: m.status,
+              isWalkover: m.status === 'walkover',
+              notes: m.notes,
+              walkoverReason: (m as any).walkoverReason,
+              woReason: (m as any).woReason,
+              reason: (m as any).reason
+            });
+          }
+        });
+      });
     }
 
     return reconstructedTournament;

@@ -232,7 +232,8 @@ export function validateKnockoutIntegrity(
     }
 
     // Walkover notes check
-    if (m.status === 'walkover' && !m.notes) {
+    const woNotes = String(m.notes ?? (m as any).walkoverReason ?? (m as any).woReason ?? (m as any).reason ?? '').trim();
+    if ((m.status === 'walkover' || (m as any).isWalkover === true) && !woNotes) {
       errors.push(`${label}: Pertandingan Walkover (WO) wajib menyertakan alasan.`);
     }
 

@@ -122,12 +122,27 @@ export function inspectRoundRobinMatches(division: Division): MatchAnomalies {
     }
 
     // 11. Walkover status without winnerId or notes
-    if (m.status === 'walkover') {
+    if (m.status === 'walkover' || (m as any).isWalkover === true) {
       if (!m.winnerId) {
         warnings.push(`${matchLabel}: Pertandingan berstatus Walkover (WO) tetapi pemenang (winnerId) tidak terisi.`);
       }
-      if (!m.notes) {
+      const notes = String(m.notes ?? (m as any).walkoverReason ?? (m as any).woReason ?? (m as any).reason ?? '').trim();
+      if (!notes) {
         warnings.push(`${matchLabel}: Pertandingan berstatus Walkover (WO) tetapi alasan/catatan tidak terisi.`);
+      }
+
+      if ((import.meta as any).env?.DEV) {
+        console.log('WO_MATCH_9_AUDIT [5. Before Validator]', {
+          id: m.id,
+          matchNo: m.matchNum || idx + 1,
+          groupId: m.groupName,
+          status: m.status,
+          isWalkover: m.status === 'walkover' || (m as any).isWalkover,
+          notes: m.notes,
+          walkoverReason: (m as any).walkoverReason,
+          woReason: (m as any).woReason,
+          reason: (m as any).reason
+        });
       }
     }
   });
@@ -185,7 +200,7 @@ export async function saveMatchesToSupabase(
           loser_entry_id: getValidEntryId(m.loserId, insertedEntryIds),
           status: m.status === 'selesai' ? 'completed' : (m.status === 'walkover' ? 'walkover' : 'scheduled'),
           is_walkover: m.status === 'walkover',
-          notes: m.notes || null
+          notes: (m.notes?.trim() ?? (m as any).walkoverReason ?? (m as any).woReason ?? (m as any).reason ?? null) || null
         });
       });
 
@@ -218,13 +233,27 @@ export async function saveMatchesToSupabase(
             is_walkover: m.status === 'walkover',
             next_match_id: nextMatchId,
             bronze_match_id: bronzeMatchId,
-            notes: m.notes || null
+            notes: (m.notes?.trim() ?? (m as any).walkoverReason ?? (m as any).woReason ?? (m as any).reason ?? null) || null
           });
         });
       }
     });
 
     const allMatches = Array.from(uniqueMatchesMap.values());
+
+    if ((import.meta as any).env?.DEV) {
+      allMatches.forEach(m => {
+        if (m.status === 'walkover' || m.match_no === 9 || String(m.id).includes('9')) {
+          console.log('WO_MATCH_9_AUDIT [3. Before Save Cloud]', {
+            id: m.id,
+            matchNo: m.match_no,
+            status: m.status,
+            isWalkover: m.is_walkover,
+            notes: m.notes
+          });
+        }
+      });
+    }
     if (allMatches.length > 0) {
       const { error: matchError } = await supabase.from('matches').upsert(allMatches);
       if (matchError) {

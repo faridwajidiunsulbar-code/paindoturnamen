@@ -127,9 +127,10 @@ export function validateTournamentClosureReadiness(
     }
 
     // 4. Check Walkover matches without notes
-    const woMatches = [...rrMatches, ...(koStage?.matches || [])].filter(m => m.status === 'walkover');
+    const woMatches = [...rrMatches, ...(koStage?.matches || [])].filter(m => m.status === 'walkover' || (m as any).isWalkover === true);
     for (const wo of woMatches) {
-      if (!wo.notes?.trim()) {
+      const notes = String(wo.notes ?? (wo as any).walkoverReason ?? (wo as any).woReason ?? (wo as any).reason ?? '').trim();
+      if (!notes) {
         divBlockers.push(`Pertandingan WO (${wo.groupName || wo.roundName || 'Match'}) belum dilengkapi catatan alasan WO.`);
         break;
       }
