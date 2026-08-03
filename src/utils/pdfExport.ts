@@ -24,88 +24,202 @@ export function sanitizePdfText(text: string | null | undefined): string {
     .trim();
 }
 
+export interface ExtractedNames {
+  name1: string;
+  name2: string;
+  affiliation: string;
+}
+
 /**
- * Resolves entry by ID using division entry map with optional global fallback.
+ * Extracts player names and affiliation from ANY runtime entry shape.
+ * Handles:
+ * - Canonical Entry: { id, name1, name2, affiliation }
+ * - DB shape: { player1_name, player2_name, club }
+ * - Alternative shapes: { player1Name, player2Name, organization }, { player1: { name }, player2: { name } }, { players: [...] }, { teamName }, { name }
  */
-export function resolveEntryById(
-  entryId: string | null | undefined,
+export function extractEntryNames(raw: unknown): ExtractedNames {
+  if (!raw || typeof raw !== 'object') {
+    return { name1: '', name2: '', affiliation: '' };
+  }
+
+  const entry = raw as Record<string, any>;
+
+  let name1 = String(
+    entry.name1 ??
+    entry.player1_name ??
+    entry.player1Name ??
+    entry.player1?.name ??
+    (Array.isArray(entry.players) && entry.players[0] ? (typeof entry.players[0] === 'string' ? entry.players[0] : entry.players[0]?.name) : '') ??
+    entry.teamName ??
+    entry.name ??
+    ''
+  ).trim();
+
+  let name2FromSplit = '';
+  if (name1 && !entry.name2 && !entry.player2_name && !entry.player2Name && name1.includes(' / ')) {
+    const parts = name1.split(' / ');
+    name1 = parts[0].trim();
+    name2FromSplit = parts.slice(1).join(' / ').trim();
+  }
+
+  const name2 = String(
+    entry.name2 ??
+    entry.player2_name ??
+    entry.player2Name ??
+    entry.player2?.name ??
+    (Array.isArray(entry.players) && entry.players[1] ? (typeof entry.players[1] === 'string' ? entry.players[1] : entry.players[1]?.name) : '') ??
+    name2FromSplit ??
+    ''
+  ).trim();
+
+  const affiliation = String(
+    entry.affiliation ??
+    entry.club ??
+    entry.organization ??
+    entry.teamClub ??
+    ''
+  ).trim();
+
+  return { name1, name2, affiliation };
+}
+
+/**
+ * Formats extracted entry names into a safe string.
+ * Never outputs "/", "/ ( )", "()", or empty slashes.
+ */
+export function formatResolvedEntry(raw: unknown, entryId?: string | null): string {
+  if (entryId === 'BYE') return 'BYE';
+
+  const { name1, name2 } = extractEntryNames(raw);
+
+  if (name1 && name2) {
+    const s1 = sanitizePdfText(name1);
+    const s2 = sanitizePdfText(name2);
+    if (s1 && s2) return `${s1} / ${s2}`;
+    if (s1) return s1;
+    if (s2) return s2;
+  }
+
+  if (name1) {
+    const s1 = sanitizePdfText(name1);
+    if (s1) return s1;
+  }
+
+  if (name2) {
+    const s2 = sanitizePdfText(name2);
+    if (s2) return s2;
+  }
+
+  return entryId
+    ? `Peserta tidak ditemukan [${entryId}]`
+    : 'Nama peserta tidak tersedia';
+}
+
+/**
+ * Gets clean affiliation text.
+ */
+export function getAffiliationText(raw: unknown): string {
+  const { affiliation } = extractEntryNames(raw);
+  const clean = sanitizePdfText(affiliation);
+  return clean || '-';
+}
+
+/**
+ * Canonical entry resolver that resolves either an entry ID string or entry object
+ * using division entryMap and global fallback map.
+ */
+export function resolveEntryDisplay(
+  entryOrId: unknown,
   entryMap: Map<string, Entry>,
-  allEntriesMap?: Map<string, Entry>
-): Entry | null {
-  if (!entryId) return null;
-  const key = String(entryId).trim();
-  if (key === 'BYE') return { id: 'BYE', name1: 'BYE' };
-  return entryMap.get(key) ?? allEntriesMap?.get(key) ?? null;
-}
-
-/**
- * Canonical entry name formatter.
- * Returns "name1 / name2" if double, or "name1" if single.
- * Never outputs "/", "/ ( )", "()", or empty string.
- */
-export function formatEntryName(entry?: Entry | null): string {
-  if (!entry) {
-    return 'Peserta tidak ditemukan';
-  }
-  if (entry.id === 'BYE') {
-    return 'BYE';
+  globalEntryMap?: Map<string, Entry>
+): { nameStr: string; affStr: string; entry: Entry | null } {
+  if (!entryOrId) {
+    return { nameStr: 'Nama peserta tidak tersedia', affStr: '-', entry: null };
   }
 
-  const name1 = String(entry.name1 ?? '').trim();
-  const name2 = String(entry.name2 ?? '').trim();
-
-  if (!name1) {
-    return 'Nama peserta tidak tersedia';
+  if (typeof entryOrId === 'string' || typeof entryOrId === 'number') {
+    const id = String(entryOrId).trim();
+    if (id === 'BYE') {
+      return { nameStr: 'BYE', affStr: '-', entry: { id: 'BYE', name1: 'BYE' } };
+    }
+    const found = entryMap.get(id) ?? globalEntryMap?.get(id) ?? null;
+    if (!found) {
+      console.debug('PDF_LOOKUP_MISSING', { requestedId: id, sampleKeys: [...entryMap.keys()].slice(0, 10) });
+      return { nameStr: `Peserta tidak ditemukan [${id}]`, affStr: '-', entry: null };
+    }
+    return {
+      nameStr: formatResolvedEntry(found, id),
+      affStr: getAffiliationText(found),
+      entry: found
+    };
   }
 
-  const formatted = name2 ? `${name1} / ${name2}` : name1;
-  return sanitizePdfText(formatted) || 'Nama peserta tidak tersedia';
-}
+  if (typeof entryOrId === 'object') {
+    const entryObj = entryOrId as Record<string, any>;
+    const objId = entryObj.id ?? entryObj.entryId ?? entryObj.entry_id ?? null;
+    if (objId && typeof objId === 'string' && !entryObj.name1 && !entryObj.player1_name && !entryObj.name) {
+      return resolveEntryDisplay(objId, entryMap, globalEntryMap);
+    }
 
-/**
- * Helper to get clean affiliation string.
- */
-export function getAffiliationText(entry?: Entry | null): string {
-  if (!entry || entry.id === 'BYE') return '-';
-  const aff = String(entry.affiliation ?? '').trim();
-  return aff ? sanitizePdfText(aff) : '-';
+    return {
+      nameStr: formatResolvedEntry(entryObj, objId),
+      affStr: getAffiliationText(entryObj),
+      entry: entryObj as Entry
+    };
+  }
+
+  return { nameStr: 'Nama peserta tidak tersedia', affStr: '-', entry: null };
 }
 
 /**
  * Priority resolver for Division Title:
- * 1. division.name (if available)
- * 2. eventName + ageGroupName
- * 3. Fallback: "Divisi tanpa nama [id]"
+ * 1. division.name or division.displayName
+ * 2. details (eventName / ageGroupName / matchTypeName)
+ * 3. Fallback: "Divisi [id]"
  */
-export function getDivisionTitle(div: Division): string {
-  const customName = (div as any).name?.trim();
-  if (customName) return sanitizePdfText(customName);
+export function getDivisionTitle(division: Division): string {
+  const customName = sanitizePdfText((division as any).name || (division as any).displayName);
 
-  const eventName = div.eventName?.trim() || '';
-  const ageGroup = div.ageGroupName?.trim() || '';
+  const details = [
+    division.eventName,
+    division.ageGroupName,
+    (division as any).matchTypeName
+  ]
+    .map(val => String(val ?? '').trim())
+    .filter(val => val.length > 0 && val.toLowerCase() !== 'unknown event' && val.toLowerCase() !== 'unknown age');
 
-  if (eventName && ageGroup) {
-    return sanitizePdfText(`${eventName} (${ageGroup})`);
+  if (customName) {
+    if (details.length > 0) {
+      return `${customName} — ${details.join(' / ')}`;
+    }
+    return customName;
   }
-  if (eventName) {
-    return sanitizePdfText(eventName);
+
+  if (details.length > 0) {
+    return details.join(' / ');
   }
-  if (ageGroup) {
-    return sanitizePdfText(`Kelompok Umur ${ageGroup}`);
-  }
-  return `Divisi tanpa nama [${div.id}]`;
+
+  return `Divisi [${division.id || 'tanpa nama'}]`;
 }
 
 /**
  * Resolver for Group Name:
- * Fallback to "Grup [id]" if group name is empty or invalid.
+ * Resolves to "Grup A", "Grup B", etc.
+ * Never outputs just "Klasemen".
  */
-export function getGroupName(group: Group): string {
-  const rawName = group.name?.trim() || '';
-  if (rawName && rawName.toLowerCase() !== 'grup' && rawName.toLowerCase() !== 'pool') {
-    return sanitizePdfText(rawName);
+export function getGroupName(group: Group | { id?: string; name?: string }): string {
+  const rawName = String(group.name ?? '').trim();
+  const cleanName = sanitizePdfText(rawName);
+
+  if (cleanName && cleanName.toLowerCase() !== 'klasemen' && cleanName.toLowerCase() !== 'grup' && cleanName.toLowerCase() !== 'pool') {
+    if (/^(grup|pool)\s+/i.test(cleanName)) {
+      return cleanName;
+    }
+    return `Grup ${cleanName}`;
   }
-  return sanitizePdfText(`Grup ${group.id || 'A'}`);
+
+  const groupId = String(group.id ?? 'A').trim();
+  return `Grup ${groupId}`;
 }
 
 /**
@@ -123,8 +237,9 @@ export function formatScore(m: Match): string {
 function getPodiumRows(
   division: Division,
   entryMap: Map<string, Entry>,
-  allEntriesMap: Map<string, Entry>,
-  integrityWarnings: string[]
+  globalEntryMap: Map<string, Entry>,
+  integrityWarnings: string[],
+  trackLookup: (found: boolean) => void
 ): [string, string, string][] {
   const rows: [string, string, string][] = [];
   const officialEntries = division.officialPodium?.entries || [];
@@ -141,34 +256,35 @@ function getPodiumRows(
         else label = `Peringkat ${pEntry.placement}`;
       }
 
-      const entry = resolveEntryById(pEntry.entryId, entryMap, allEntriesMap);
+      const { nameStr, affStr, entry } = resolveEntryDisplay(pEntry.entryId || (pEntry as any).entry, entryMap, globalEntryMap);
+      trackLookup(!!entry);
       if (!entry && pEntry.entryId) {
         integrityWarnings.push(`Podium division ${division.id}: entryId tidak ditemukan: ${pEntry.entryId}`);
       }
-      const nameStr = entry ? formatEntryName(entry) : `Peserta tidak ditemukan [${pEntry.entryId}]`;
-      const affStr = getAffiliationText(entry);
       rows.push([label, nameStr, affStr]);
     });
     return rows;
   }
 
-  // Fallback to champions object
   const champs = division.champions;
   if (champs && (champs.firstPlaceEntryId || champs.secondPlaceEntryId || champs.thirdPlaceEntryId)) {
     if (champs.firstPlaceEntryId) {
-      const e1 = resolveEntryById(champs.firstPlaceEntryId, entryMap, allEntriesMap);
-      if (!e1) integrityWarnings.push(`Champions Juara 1 division ${division.id}: entryId tidak ditemukan: ${champs.firstPlaceEntryId}`);
-      rows.push(['Champion (Juara 1)', e1 ? formatEntryName(e1) : `Peserta tidak ditemukan [${champs.firstPlaceEntryId}]`, getAffiliationText(e1)]);
+      const { nameStr, affStr, entry } = resolveEntryDisplay(champs.firstPlaceEntryId, entryMap, globalEntryMap);
+      trackLookup(!!entry);
+      if (!entry) integrityWarnings.push(`Champions Juara 1 division ${division.id}: entryId tidak ditemukan: ${champs.firstPlaceEntryId}`);
+      rows.push(['Champion (Juara 1)', nameStr, affStr]);
     }
     if (champs.secondPlaceEntryId) {
-      const e2 = resolveEntryById(champs.secondPlaceEntryId, entryMap, allEntriesMap);
-      if (!e2) integrityWarnings.push(`Champions Juara 2 division ${division.id}: entryId tidak ditemukan: ${champs.secondPlaceEntryId}`);
-      rows.push(['Runner Up (Juara 2)', e2 ? formatEntryName(e2) : `Peserta tidak ditemukan [${champs.secondPlaceEntryId}]`, getAffiliationText(e2)]);
+      const { nameStr, affStr, entry } = resolveEntryDisplay(champs.secondPlaceEntryId, entryMap, globalEntryMap);
+      trackLookup(!!entry);
+      if (!entry) integrityWarnings.push(`Champions Juara 2 division ${division.id}: entryId tidak ditemukan: ${champs.secondPlaceEntryId}`);
+      rows.push(['Runner Up (Juara 2)', nameStr, affStr]);
     }
     if (champs.thirdPlaceEntryId) {
-      const e3 = resolveEntryById(champs.thirdPlaceEntryId, entryMap, allEntriesMap);
-      if (!e3) integrityWarnings.push(`Champions Juara 3 division ${division.id}: entryId tidak ditemukan: ${champs.thirdPlaceEntryId}`);
-      rows.push(['Juara 3', e3 ? formatEntryName(e3) : `Peserta tidak ditemukan [${champs.thirdPlaceEntryId}]`, getAffiliationText(e3)]);
+      const { nameStr, affStr, entry } = resolveEntryDisplay(champs.thirdPlaceEntryId, entryMap, globalEntryMap);
+      trackLookup(!!entry);
+      if (!entry) integrityWarnings.push(`Champions Juara 3 division ${division.id}: entryId tidak ditemukan: ${champs.thirdPlaceEntryId}`);
+      rows.push(['Juara 3', nameStr, affStr]);
     }
     return rows;
   }
@@ -178,7 +294,59 @@ function getPodiumRows(
 }
 
 export function exportTournamentToPDF(tournament: Tournament): void {
+  // --- SECTION A: AUDIT RUNTIME LOGGING ---
+  console.debug('PDF_RUNTIME_TOURNAMENT', tournament);
+
+  console.debug(
+    'PDF_RUNTIME_DIVISIONS',
+    tournament.activeDivisions?.map(d => ({
+      id: d.id,
+      name: (d as any).name,
+      eventName: d.eventName,
+      ageGroupName: d.ageGroupName,
+      matchTypeName: (d as any).matchTypeName,
+      entries: d.entries,
+      groups: d.groups,
+      officialPodium: d.officialPodium
+    }))
+  );
+
+  console.debug(
+    'PDF_RUNTIME_FIRST_ENTRY',
+    tournament.activeDivisions?.[0]?.entries?.[0]
+  );
+
+  console.debug(
+    'PDF_RUNTIME_FIRST_STANDING',
+    tournament.activeDivisions?.[0]?.groups?.[0]
+      ? calculateGroupStandings(
+          tournament.activeDivisions[0].groups[0],
+          tournament.activeDivisions[0].roundRobinMatches || [],
+          tournament.activeDivisions[0].entries || [],
+          2
+        )?.[0]
+      : null
+  );
+
+  console.debug(
+    'PDF_RUNTIME_FIRST_MATCH',
+    tournament.activeDivisions?.[0]?.roundRobinMatches?.[0] ||
+      tournament.activeDivisions?.[0]?.knockoutStage?.matches?.[0]
+  );
+
+  console.debug(
+    'PDF_RUNTIME_OFFICIAL_PODIUM',
+    tournament.activeDivisions?.[0]?.officialPodium
+  );
+
   const integrityWarnings: string[] = [];
+  let totalRequestedCount = 0;
+  let missingCount = 0;
+
+  const trackLookup = (found: boolean) => {
+    totalRequestedCount++;
+    if (!found) missingCount++;
+  };
 
   const doc = new jsPDF({
     orientation: 'portrait',
@@ -189,14 +357,32 @@ export function exportTournamentToPDF(tournament: Tournament): void {
   const { name, date, location, activeDivisions = [] } = tournament;
 
   // Build global fallback entry map
-  const allEntriesMap = new Map<string, Entry>();
+  const globalEntryMap = new Map<string, Entry>();
+
+  // Collect entries from activeDivisions
   activeDivisions.forEach(div => {
     (div.entries || []).forEach(e => {
-      if (e && e.id) {
-        allEntriesMap.set(String(e.id).trim(), e);
+      if (e && typeof e === 'object') {
+        const id = (e as any).id ?? (e as any).entryId ?? (e as any).entry_id;
+        if (id) {
+          globalEntryMap.set(String(id).trim(), e);
+        }
       }
     });
   });
+
+  // Collect entries from global tournament fields if present
+  const globalEntriesArr = (tournament as any).entries || (tournament as any).participants || [];
+  if (Array.isArray(globalEntriesArr)) {
+    globalEntriesArr.forEach((e: any) => {
+      if (e && typeof e === 'object') {
+        const id = e.id ?? e.entryId ?? e.entry_id;
+        if (id) {
+          globalEntryMap.set(String(id).trim(), e);
+        }
+      }
+    });
+  }
 
   const sanitizedTitle = name?.trim() ? sanitizePdfText(name) : 'Nama Turnamen';
   const sanitizedLocation = location?.trim() ? sanitizePdfText(location) : '-';
@@ -265,8 +451,11 @@ export function exportTournamentToPDF(tournament: Tournament): void {
     // Construct division entryMap
     const entryMap = new Map<string, Entry>();
     (div.entries || []).forEach(e => {
-      if (e && e.id) {
-        entryMap.set(String(e.id).trim(), e);
+      if (e && typeof e === 'object') {
+        const id = (e as any).id ?? (e as any).entryId ?? (e as any).entry_id;
+        if (id) {
+          entryMap.set(String(id).trim(), e);
+        }
       }
     });
 
@@ -299,7 +488,7 @@ export function exportTournamentToPDF(tournament: Tournament): void {
     doc.text('REKAPITULASI JUARA (HASIL AKHIR)', 15, currentY);
     currentY += 4;
 
-    const podiumBody = getPodiumRows(div, entryMap, allEntriesMap, integrityWarnings);
+    const podiumBody = getPodiumRows(div, entryMap, globalEntryMap, integrityWarnings, trackLookup);
     const championsHead = ['Podium', 'Nama Tim / Pemain', 'Afiliasi / Klub'];
 
     autoTable(doc, {
@@ -351,11 +540,12 @@ export function exportTournamentToPDF(tournament: Tournament): void {
 
         const standingsHead = ['Pos', 'Nama Tim / Pemain', 'Main', 'M', 'K', 'Poin +/-', 'Selisih', 'Status'];
         const standingsBody = standings.map(row => {
-          const entry = resolveEntryById(row.entryId, entryMap, allEntriesMap);
-          if (!entry) {
-            integrityWarnings.push(`Klasemen ${groupTitle}: entryId tidak ditemukan: ${row.entryId}`);
+          const rowKey = row.entryId ?? (row as any).id ?? (row as any).entry?.id;
+          const { nameStr, entry } = resolveEntryDisplay(rowKey || (row as any).entry || row.entryName, entryMap, globalEntryMap);
+          trackLookup(!!entry);
+          if (!entry && rowKey) {
+            integrityWarnings.push(`Klasemen ${groupTitle}: entryId tidak ditemukan: ${rowKey}`);
           }
-          const nameStr = entry ? formatEntryName(entry) : `Peserta tidak ditemukan [${row.entryId}]`;
           return [
             row.rank.toString(),
             nameStr,
@@ -414,39 +604,42 @@ export function exportTournamentToPDF(tournament: Tournament): void {
     const allMatchesList: { type: string; info: string; team1: string; team2: string; score: string; winner: string; status: string }[] = [];
 
     rrMatches.forEach(m => {
-      const t1 = resolveEntryById(m.entryId1, entryMap, allEntriesMap);
-      const t2 = resolveEntryById(m.entryId2, entryMap, allEntriesMap);
+      const id1 = m.entryId1 ?? (m as any).entryAId ?? (m as any).entry_a_id;
+      const id2 = m.entryId2 ?? (m as any).entryBId ?? (m as any).entry_b_id;
 
-      if (m.entryId1 && !t1 && m.entryId1 !== 'BYE') {
-        integrityWarnings.push(`Match RR ${m.id}: entryId1 tidak ditemukan: ${m.entryId1}`);
+      const res1 = resolveEntryDisplay(id1, entryMap, globalEntryMap);
+      const res2 = resolveEntryDisplay(id2, entryMap, globalEntryMap);
+
+      if (id1 && id1 !== 'BYE') trackLookup(!!res1.entry);
+      if (id2 && id2 !== 'BYE') trackLookup(!!res2.entry);
+
+      if (id1 && !res1.entry && id1 !== 'BYE') {
+        integrityWarnings.push(`Match RR ${m.id}: entryId1 tidak ditemukan: ${id1}`);
       }
-      if (m.entryId2 && !t2 && m.entryId2 !== 'BYE') {
-        integrityWarnings.push(`Match RR ${m.id}: entryId2 tidak ditemukan: ${m.entryId2}`);
+      if (id2 && !res2.entry && id2 !== 'BYE') {
+        integrityWarnings.push(`Match RR ${m.id}: entryId2 tidak ditemukan: ${id2}`);
       }
 
       let winnerStr = '-';
       if (m.status === 'selesai' || m.status === 'walkover') {
-        if (m.winnerId) {
-          const winner = resolveEntryById(m.winnerId, entryMap, allEntriesMap);
-          if (!winner) {
-            integrityWarnings.push(`Match RR ${m.id}: winnerId tidak ditemukan: ${m.winnerId}`);
-            winnerStr = `Peserta tidak ditemukan [${m.winnerId}]`;
-          } else {
-            winnerStr = formatEntryName(winner);
+        const wId = m.winnerId ?? (m as any).winner_entry_id;
+        if (wId) {
+          const resW = resolveEntryDisplay(wId, entryMap, globalEntryMap);
+          trackLookup(!!resW.entry);
+          if (!resW.entry) {
+            integrityWarnings.push(`Match RR ${m.id}: winnerId tidak ditemukan: ${wId}`);
           }
+          winnerStr = resW.nameStr;
         } else {
           winnerStr = 'Pemenang belum tercatat';
         }
       }
 
-      const team1Str = t1 ? formatEntryName(t1) : (m.entryId1 === 'BYE' ? 'BYE' : (m.entryId1 ? `Peserta tidak ditemukan [${m.entryId1}]` : '-'));
-      const team2Str = t2 ? formatEntryName(t2) : (m.entryId2 === 'BYE' ? 'BYE' : (m.entryId2 ? `Peserta tidak ditemukan [${m.entryId2}]` : '-'));
-
       allMatchesList.push({
         type: 'Round Robin',
         info: m.groupName ? sanitizePdfText(m.groupName) : 'Grup',
-        team1: team1Str,
-        team2: team2Str,
+        team1: res1.nameStr,
+        team2: res2.nameStr,
         score: formatScore(m),
         winner: winnerStr,
         status: m.status === 'selesai' ? 'Selesai' : (m.status === 'walkover' ? 'Walkover (W/O)' : 'Belum Dimainkan')
@@ -454,39 +647,42 @@ export function exportTournamentToPDF(tournament: Tournament): void {
     });
 
     koMatches.forEach(m => {
-      const t1 = resolveEntryById(m.entryId1, entryMap, allEntriesMap);
-      const t2 = resolveEntryById(m.entryId2, entryMap, allEntriesMap);
+      const id1 = m.entryId1 ?? (m as any).entryAId ?? (m as any).entry_a_id;
+      const id2 = m.entryId2 ?? (m as any).entryBId ?? (m as any).entry_b_id;
 
-      if (m.entryId1 && !t1 && m.entryId1 !== 'BYE') {
-        integrityWarnings.push(`Match KO ${m.id}: entryId1 tidak ditemukan: ${m.entryId1}`);
+      const res1 = resolveEntryDisplay(id1, entryMap, globalEntryMap);
+      const res2 = resolveEntryDisplay(id2, entryMap, globalEntryMap);
+
+      if (id1 && id1 !== 'BYE') trackLookup(!!res1.entry);
+      if (id2 && id2 !== 'BYE') trackLookup(!!res2.entry);
+
+      if (id1 && !res1.entry && id1 !== 'BYE') {
+        integrityWarnings.push(`Match KO ${m.id}: entryId1 tidak ditemukan: ${id1}`);
       }
-      if (m.entryId2 && !t2 && m.entryId2 !== 'BYE') {
-        integrityWarnings.push(`Match KO ${m.id}: entryId2 tidak ditemukan: ${m.entryId2}`);
+      if (id2 && !res2.entry && id2 !== 'BYE') {
+        integrityWarnings.push(`Match KO ${m.id}: entryId2 tidak ditemukan: ${id2}`);
       }
 
       let winnerStr = '-';
       if (m.status === 'selesai' || m.status === 'walkover') {
-        if (m.winnerId) {
-          const winner = resolveEntryById(m.winnerId, entryMap, allEntriesMap);
-          if (!winner) {
-            integrityWarnings.push(`Match KO ${m.id}: winnerId tidak ditemukan: ${m.winnerId}`);
-            winnerStr = `Peserta tidak ditemukan [${m.winnerId}]`;
-          } else {
-            winnerStr = formatEntryName(winner);
+        const wId = m.winnerId ?? (m as any).winner_entry_id;
+        if (wId) {
+          const resW = resolveEntryDisplay(wId, entryMap, globalEntryMap);
+          trackLookup(!!resW.entry);
+          if (!resW.entry) {
+            integrityWarnings.push(`Match KO ${m.id}: winnerId tidak ditemukan: ${wId}`);
           }
+          winnerStr = resW.nameStr;
         } else {
           winnerStr = 'Pemenang belum tercatat';
         }
       }
 
-      const team1Str = t1 ? formatEntryName(t1) : (m.entryId1 === 'BYE' ? 'BYE' : (m.entryId1 ? `Peserta tidak ditemukan [${m.entryId1}]` : '-'));
-      const team2Str = t2 ? formatEntryName(t2) : (m.entryId2 === 'BYE' ? 'BYE' : (m.entryId2 ? `Peserta tidak ditemukan [${m.entryId2}]` : '-'));
-
       allMatchesList.push({
         type: 'Knockout',
         info: m.roundName ? sanitizePdfText(m.roundName) : 'Fase Gugur',
-        team1: team1Str,
-        team2: team2Str,
+        team1: res1.nameStr,
+        team2: res2.nameStr,
         score: formatScore(m),
         winner: winnerStr,
         status: m.status === 'selesai' ? 'Selesai' : (m.status === 'walkover' ? 'Walkover (W/O)' : 'Belum Dimainkan')
@@ -541,6 +737,21 @@ export function exportTournamentToPDF(tournament: Tournament): void {
     console.warn('PDF DATA INTEGRITY WARNINGS:', integrityWarnings);
   }
 
+  // --- SECTION K: FAIL-LOUD IN DEVELOPMENT ---
+  if (totalRequestedCount > 0) {
+    const missingRatio = missingCount / totalRequestedCount;
+    if (missingRatio > 0.2) {
+      const isDev = process.env.NODE_ENV !== 'production' || (import.meta as any).env?.DEV;
+      if (isDev) {
+        throw new Error(
+          `PDF entry resolver gagal: ${missingCount}/${totalRequestedCount} peserta tidak ditemukan`
+        );
+      } else {
+        console.warn(`PDF entry resolver warning: ${missingCount}/${totalRequestedCount} peserta tidak ditemukan.`);
+      }
+    }
+  }
+
   // --- FINAL PASS: DRAW HEADER ACCENT AND FOOTER WITH SINGLE SOURCE OF TRUTH PAGE NUMBERS ---
   const totalPages = doc.getNumberOfPages();
 
@@ -571,4 +782,3 @@ export function exportTournamentToPDF(tournament: Tournament): void {
   const filename = `Laporan_Turnamen_${sanitizedTitle.replace(/[^a-zA-Z0-9]/g, '_') || 'Pickleball'}.pdf`;
   doc.save(filename);
 }
-
