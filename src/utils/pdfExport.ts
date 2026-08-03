@@ -5,135 +5,217 @@
 
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import { Tournament, Division, Match, Entry, ThirdPlaceMode } from '../types';
+import { Tournament, Division, Match, Entry, Group } from '../types';
 import { calculateGroupStandings } from './tournamentHelpers';
 
 /**
  * Sanitizes string values for PDF rendering.
  * Strips surrogate pairs, emoji unicode ranges, control characters, and private use unicode.
- * Preserves standard Indonesian characters, numbers, letters, punctuation, and apostrophes (e.g. "Aco'").
+ * Preserves standard Indonesian characters, numbers, letters, punctuation, apostrophes (e.g. "O'Connor"),
+ * hyphens (e.g. "Abdul-Rahman"), and slashes (e.g. "Coach Nadir / Coach Arif").
  */
 export function sanitizePdfText(text: string | null | undefined): string {
   if (text === null || text === undefined) return '';
   const str = String(text);
   return str
-    .replace(/[\u1F600-\u1F64F\u1F300-\u1F5FF\u1F680-\u1F6FF\u1F700-\u1F77F\u1F780-\u1F7FF\u1F800-\u1F8FF\u1F900-\u1F9FF\u1FA00-\u1FA6F\u1FA70-\u1FAFF\u2600-\u26FF\u2700-\u27BF]/g, '')
+    .replace(/[\u1F600-\u1F64F\u1F300-\u1F5FF\u1F680-\u1F6FF\u1F700-\u1F77F\u1F800-\u1F8FF\u1F900-\u1F9FF\u1FA00-\u1FA6F\u1FA70-\u1FAFF\u2600-\u26FF\u2700-\u27BF]/g, '')
     .replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g, '')
     .replace(/[\x00-\x09\x0B-\x1F\x7F-\x9F]/g, '')
     .trim();
 }
 
-// Helper to format player/team names safely
-export function getEntryName(entry: Entry | undefined): string {
-  if (!entry) return '-';
-  if (entry.id === 'BYE') return 'BYE';
-  const name = entry.name1 + (entry.name2 ? ` / ${entry.name2}` : '');
-  const full = entry.affiliation ? `${name} (${entry.affiliation})` : name;
-  return sanitizePdfText(full);
-}
-
-// Helper to get affiliation string
-function getAffiliation(entryId: string | null | undefined, entries: Entry[]): string {
-  if (!entryId) return '-';
-  const entry = entries.find(e => e.id === entryId);
-  return entry?.affiliation ? sanitizePdfText(entry.affiliation) : '-';
-}
-
-// Helper to format match score
-export function formatScore(m: Match): string {
-  if (m.status === 'belum_dimainkan') return 'Belum Dimainkan';
-  if (m.status === 'walkover') return 'W/O (Walkover)';
-  return `${m.score1 ?? 0} - ${m.score2 ?? 0}`;
-}
-
-// Helper to get winner label
-export function getWinnerLabel(m: Match, entries: Entry[]): string {
-  if (m.status !== 'selesai' && m.status !== 'walkover') return '-';
-  if (!m.winnerId) return '-';
-  const winner = entries.find(e => e.id === m.winnerId);
-  return getEntryName(winner);
+/**
+ * Resolves entry by ID using division entry map with optional global fallback.
+ */
+export function resolveEntryById(
+  entryId: string | null | undefined,
+  entryMap: Map<string, Entry>,
+  allEntriesMap?: Map<string, Entry>
+): Entry | null {
+  if (!entryId) return null;
+  const key = String(entryId).trim();
+  if (key === 'BYE') return { id: 'BYE', name1: 'BYE' };
+  return entryMap.get(key) ?? allEntriesMap?.get(key) ?? null;
 }
 
 /**
- * Builds the podium rows based on actual thirdPlaceMode configuration.
+ * Canonical entry name formatter.
+ * Returns "name1 / name2" if double, or "name1" if single.
+ * Never outputs "/", "/ ( )", "()", or empty string.
  */
-function getPodiumRows(division: Division, entries: Entry[]): [string, string, string][] {
-  const settings = division.settings;
-  const thirdPlaceMode: ThirdPlaceMode = settings?.thirdPlaceMode || (settings?.thirdPlaceEnabled === false ? 'none' : 'playoff');
-  const champions = division.champions;
-  const koMatches = division.knockoutStage?.matches || [];
-
-  const c1Name = champions?.firstPlaceEntryId
-    ? getEntryName(entries.find(e => e.id === champions.firstPlaceEntryId))
-    : 'Belum ditentukan';
-  const c1Aff = getAffiliation(champions?.firstPlaceEntryId, entries);
-
-  const c2Name = champions?.secondPlaceEntryId
-    ? getEntryName(entries.find(e => e.id === champions.secondPlaceEntryId))
-    : 'Belum ditentukan';
-  const c2Aff = getAffiliation(champions?.secondPlaceEntryId, entries);
-
-  const rows: [string, string, string][] = [
-    ['Champion (Juara 1)', c1Name, c1Aff],
-    ['Runner Up (Juara 2)', c2Name, c2Aff],
-  ];
-
-  if (thirdPlaceMode === 'shared_bronze') {
-    const sfMatches = koMatches.filter(m => m.roundName === 'Semifinal');
-    const sf1 = sfMatches[0];
-    const sf2 = sfMatches[1];
-
-    const sf1LoserId = sf1 && (sf1.status === 'selesai' || sf1.status === 'walkover') ? sf1.loserId : null;
-    const sf2LoserId = sf2 && (sf2.status === 'selesai' || sf2.status === 'walkover') ? sf2.loserId : null;
-
-    const b1Name = sf1LoserId ? getEntryName(entries.find(e => e.id === sf1LoserId)) : 'Belum ditentukan';
-    const b2Name = sf2LoserId ? getEntryName(entries.find(e => e.id === sf2LoserId)) : 'Belum ditentukan';
-
-    rows.push(['Juara 3 Bersama', b1Name, getAffiliation(sf1LoserId, entries)]);
-    rows.push(['Juara 3 Bersama', b2Name, getAffiliation(sf2LoserId, entries)]);
-
-  } else if (thirdPlaceMode === 'playoff') {
-    const bronzeMatch = koMatches.find(m => m.isBronzeMatch || m.roundName === 'Perebutan Juara 3');
-    let j3Name = 'Belum ditentukan';
-    let j3Aff = '-';
-    let p4Name = 'Belum ditentukan';
-    let p4Aff = '-';
-
-    if (bronzeMatch && (bronzeMatch.status === 'selesai' || bronzeMatch.status === 'walkover') && bronzeMatch.winnerId) {
-      const winnerEntry = entries.find(e => e.id === bronzeMatch.winnerId);
-      const loserEntry = entries.find(e => e.id === bronzeMatch.loserId);
-      j3Name = getEntryName(winnerEntry);
-      j3Aff = winnerEntry?.affiliation ? sanitizePdfText(winnerEntry.affiliation) : '-';
-      p4Name = getEntryName(loserEntry);
-      p4Aff = loserEntry?.affiliation ? sanitizePdfText(loserEntry.affiliation) : '-';
-    } else if (champions?.thirdPlaceEntryId) {
-      const winnerEntry = entries.find(e => e.id === champions.thirdPlaceEntryId);
-      j3Name = getEntryName(winnerEntry);
-      j3Aff = winnerEntry?.affiliation ? sanitizePdfText(winnerEntry.affiliation) : '-';
-    }
-
-    rows.push(['Juara 3', j3Name, j3Aff]);
-    rows.push(['Peringkat 4', p4Name, p4Aff]);
+export function formatEntryName(entry?: Entry | null): string {
+  if (!entry) {
+    return 'Peserta tidak ditemukan';
+  }
+  if (entry.id === 'BYE') {
+    return 'BYE';
   }
 
-  // If thirdPlaceMode === 'none', no 3rd or 4th place rows are added.
+  const name1 = String(entry.name1 ?? '').trim();
+  const name2 = String(entry.name2 ?? '').trim();
 
+  if (!name1) {
+    return 'Nama peserta tidak tersedia';
+  }
+
+  const formatted = name2 ? `${name1} / ${name2}` : name1;
+  return sanitizePdfText(formatted) || 'Nama peserta tidak tersedia';
+}
+
+/**
+ * Helper to get clean affiliation string.
+ */
+export function getAffiliationText(entry?: Entry | null): string {
+  if (!entry || entry.id === 'BYE') return '-';
+  const aff = String(entry.affiliation ?? '').trim();
+  return aff ? sanitizePdfText(aff) : '-';
+}
+
+/**
+ * Priority resolver for Division Title:
+ * 1. division.name (if available)
+ * 2. eventName + ageGroupName
+ * 3. Fallback: "Divisi tanpa nama [id]"
+ */
+export function getDivisionTitle(div: Division): string {
+  const customName = (div as any).name?.trim();
+  if (customName) return sanitizePdfText(customName);
+
+  const eventName = div.eventName?.trim() || '';
+  const ageGroup = div.ageGroupName?.trim() || '';
+
+  if (eventName && ageGroup) {
+    return sanitizePdfText(`${eventName} (${ageGroup})`);
+  }
+  if (eventName) {
+    return sanitizePdfText(eventName);
+  }
+  if (ageGroup) {
+    return sanitizePdfText(`Kelompok Umur ${ageGroup}`);
+  }
+  return `Divisi tanpa nama [${div.id}]`;
+}
+
+/**
+ * Resolver for Group Name:
+ * Fallback to "Grup [id]" if group name is empty or invalid.
+ */
+export function getGroupName(group: Group): string {
+  const rawName = group.name?.trim() || '';
+  if (rawName && rawName.toLowerCase() !== 'grup' && rawName.toLowerCase() !== 'pool') {
+    return sanitizePdfText(rawName);
+  }
+  return sanitizePdfText(`Grup ${group.id || 'A'}`);
+}
+
+/**
+ * Helper to format match score safely.
+ */
+export function formatScore(m: Match): string {
+  if (m.status === 'belum_dimainkan') return 'Belum Dimainkan';
+  if (m.status === 'walkover') return 'W/O';
+  return `${m.score1 ?? 0} - ${m.score2 ?? 0}`;
+}
+
+/**
+ * Builds canonical podium rows using active champions / official podium rows.
+ */
+function getPodiumRows(
+  division: Division,
+  entryMap: Map<string, Entry>,
+  allEntriesMap: Map<string, Entry>,
+  integrityWarnings: string[]
+): [string, string, string][] {
+  const rows: [string, string, string][] = [];
+  const officialEntries = division.officialPodium?.entries || [];
+
+  if (division.podiumOfficial && officialEntries.length > 0) {
+    const sorted = [...officialEntries].sort((a, b) => a.placement - b.placement);
+    sorted.forEach((pEntry) => {
+      let label: string = pEntry.label || '';
+      if (!label) {
+        if (pEntry.placement === 1) label = 'Champion (Juara 1)';
+        else if (pEntry.placement === 2) label = 'Runner Up (Juara 2)';
+        else if (pEntry.placement === 3) label = pEntry.isShared ? 'Juara 3 Bersama' : 'Juara 3';
+        else if (pEntry.placement === 4) label = 'Peringkat 4';
+        else label = `Peringkat ${pEntry.placement}`;
+      }
+
+      const entry = resolveEntryById(pEntry.entryId, entryMap, allEntriesMap);
+      if (!entry && pEntry.entryId) {
+        integrityWarnings.push(`Podium division ${division.id}: entryId tidak ditemukan: ${pEntry.entryId}`);
+      }
+      const nameStr = entry ? formatEntryName(entry) : `Peserta tidak ditemukan [${pEntry.entryId}]`;
+      const affStr = getAffiliationText(entry);
+      rows.push([label, nameStr, affStr]);
+    });
+    return rows;
+  }
+
+  // Fallback to champions object
+  const champs = division.champions;
+  if (champs && (champs.firstPlaceEntryId || champs.secondPlaceEntryId || champs.thirdPlaceEntryId)) {
+    if (champs.firstPlaceEntryId) {
+      const e1 = resolveEntryById(champs.firstPlaceEntryId, entryMap, allEntriesMap);
+      if (!e1) integrityWarnings.push(`Champions Juara 1 division ${division.id}: entryId tidak ditemukan: ${champs.firstPlaceEntryId}`);
+      rows.push(['Champion (Juara 1)', e1 ? formatEntryName(e1) : `Peserta tidak ditemukan [${champs.firstPlaceEntryId}]`, getAffiliationText(e1)]);
+    }
+    if (champs.secondPlaceEntryId) {
+      const e2 = resolveEntryById(champs.secondPlaceEntryId, entryMap, allEntriesMap);
+      if (!e2) integrityWarnings.push(`Champions Juara 2 division ${division.id}: entryId tidak ditemukan: ${champs.secondPlaceEntryId}`);
+      rows.push(['Runner Up (Juara 2)', e2 ? formatEntryName(e2) : `Peserta tidak ditemukan [${champs.secondPlaceEntryId}]`, getAffiliationText(e2)]);
+    }
+    if (champs.thirdPlaceEntryId) {
+      const e3 = resolveEntryById(champs.thirdPlaceEntryId, entryMap, allEntriesMap);
+      if (!e3) integrityWarnings.push(`Champions Juara 3 division ${division.id}: entryId tidak ditemukan: ${champs.thirdPlaceEntryId}`);
+      rows.push(['Juara 3', e3 ? formatEntryName(e3) : `Peserta tidak ditemukan [${champs.thirdPlaceEntryId}]`, getAffiliationText(e3)]);
+    }
+    return rows;
+  }
+
+  rows.push(['Status Pengesahan Podium', 'Belum disahkan', '-']);
   return rows;
 }
 
 export function exportTournamentToPDF(tournament: Tournament): void {
+  const integrityWarnings: string[] = [];
+
   const doc = new jsPDF({
     orientation: 'portrait',
     unit: 'mm',
     format: 'a4',
   });
 
-  const { name, date, location, activeDivisions } = tournament;
+  const { name, date, location, activeDivisions = [] } = tournament;
 
-  const sanitizedTitle = sanitizePdfText(name || 'Nama Turnamen');
-  const sanitizedLocation = sanitizePdfText(location || 'Belum diatur');
+  // Build global fallback entry map
+  const allEntriesMap = new Map<string, Entry>();
+  activeDivisions.forEach(div => {
+    (div.entries || []).forEach(e => {
+      if (e && e.id) {
+        allEntriesMap.set(String(e.id).trim(), e);
+      }
+    });
+  });
 
-  // Title page or Header configuration
+  const sanitizedTitle = name?.trim() ? sanitizePdfText(name) : 'Nama Turnamen';
+  const sanitizedLocation = location?.trim() ? sanitizePdfText(location) : '-';
+
+  let formattedDate = '-';
+  if (date) {
+    try {
+      const d = new Date(date);
+      if (!isNaN(d.getTime())) {
+        formattedDate = d.toLocaleDateString('id-ID', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+      } else {
+        formattedDate = sanitizePdfText(date) || '-';
+      }
+    } catch {
+      formattedDate = sanitizePdfText(date) || '-';
+    }
+  }
+
+  // Header styling
   const titleColor = [15, 23, 42]; // Slate-900 / Navy
   const accentColor = [16, 185, 129]; // Emerald Green
 
@@ -161,9 +243,6 @@ export function exportTournamentToPDF(tournament: Tournament): void {
 
   doc.setFont('helvetica', 'normal');
   doc.setTextColor(15, 23, 42);
-  const formattedDate = date 
-    ? new Date(date).toLocaleDateString('id-ID', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }) 
-    : 'Belum diatur';
   doc.text(sanitizePdfText(formattedDate), 65, 41);
   doc.text(sanitizedLocation, 65, 49);
 
@@ -176,21 +255,27 @@ export function exportTournamentToPDF(tournament: Tournament): void {
   doc.setFont('helvetica', 'bold');
   doc.setTextColor(15, 23, 42);
   doc.text(`${activeDivisions.length} Divisi`, 165, 41);
-  const totalEntries = activeDivisions.reduce((acc, d) => acc + d.entries.length, 0);
+  const totalEntries = activeDivisions.reduce((acc, d) => acc + (d.entries?.length || 0), 0);
   doc.text(`${totalEntries} Tim`, 165, 49);
 
   let currentY = 68;
 
   // --- PROCESS EACH DIVISION ---
   activeDivisions.forEach((div, divIndex) => {
-    // If not the first division, start a new page
+    // Construct division entryMap
+    const entryMap = new Map<string, Entry>();
+    (div.entries || []).forEach(e => {
+      if (e && e.id) {
+        entryMap.set(String(e.id).trim(), e);
+      }
+    });
+
     if (divIndex > 0) {
       doc.addPage();
       currentY = 20;
     }
 
-    const eventNameClean = sanitizePdfText(div.eventName).toUpperCase();
-    const ageGroupClean = sanitizePdfText(div.ageGroupName);
+    const divTitle = getDivisionTitle(div);
 
     // Division Title Bar
     doc.setFillColor(241, 245, 249); // Light Gray background
@@ -198,11 +283,11 @@ export function exportTournamentToPDF(tournament: Tournament): void {
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(12);
     doc.setTextColor(15, 23, 42); // Navy
-    doc.text(`DIVISI: ${eventNameClean} (${ageGroupClean})`, 18, currentY + 7);
+    doc.text(`DIVISI: ${divTitle.toUpperCase()}`, 18, currentY + 7);
 
     currentY += 16;
 
-    // --- SUB-SECTION 1: REKAPITULASI JUARA (CHAMPIONS) ---
+    // --- SUB-SECTION 1: REKAPITULASI JUARA (CHAMPIONS / PODIUM) ---
     if (currentY > 230) {
       doc.addPage();
       currentY = 20;
@@ -214,7 +299,7 @@ export function exportTournamentToPDF(tournament: Tournament): void {
     doc.text('REKAPITULASI JUARA (HASIL AKHIR)', 15, currentY);
     currentY += 4;
 
-    const podiumBody = getPodiumRows(div, div.entries);
+    const podiumBody = getPodiumRows(div, entryMap, allEntriesMap, integrityWarnings);
     const championsHead = ['Podium', 'Nama Tim / Pemain', 'Afiliasi / Klub'];
 
     autoTable(doc, {
@@ -255,18 +340,22 @@ export function exportTournamentToPDF(tournament: Tournament): void {
           currentY = 20;
         }
 
-        const standings = calculateGroupStandings(group, div.roundRobinMatches, div.entries, div.settings.playersQualifyingPerGroup || 2);
+        const groupTitle = getGroupName(group);
+        const standings = calculateGroupStandings(group, div.roundRobinMatches || [], div.entries || [], div.settings?.playersQualifyingPerGroup || 2);
 
         doc.setFont('helvetica', 'bold');
         doc.setFontSize(9);
         doc.setTextColor(71, 85, 105);
-        doc.text(`Klasemen ${sanitizePdfText(group.name)}`, 15, currentY);
+        doc.text(`Klasemen ${groupTitle}`, 15, currentY);
         currentY += 3;
 
         const standingsHead = ['Pos', 'Nama Tim / Pemain', 'Main', 'M', 'K', 'Poin +/-', 'Selisih', 'Status'];
         const standingsBody = standings.map(row => {
-          const entry = div.entries.find(e => e.id === row.entryId);
-          const nameStr = getEntryName(entry);
+          const entry = resolveEntryById(row.entryId, entryMap, allEntriesMap);
+          if (!entry) {
+            integrityWarnings.push(`Klasemen ${groupTitle}: entryId tidak ditemukan: ${row.entryId}`);
+          }
+          const nameStr = entry ? formatEntryName(entry) : `Peserta tidak ditemukan [${row.entryId}]`;
           return [
             row.rank.toString(),
             nameStr,
@@ -275,7 +364,7 @@ export function exportTournamentToPDF(tournament: Tournament): void {
             row.lost.toString(),
             `${row.pointsFor}-${row.pointsAgainst}`,
             row.pointDifference > 0 ? `+${row.pointDifference}` : row.pointDifference.toString(),
-            row.rank <= (div.settings.playersQualifyingPerGroup || 2) ? 'Qualify' : '-'
+            row.rank <= (div.settings?.playersQualifyingPerGroup || 2) ? 'Qualify' : '-'
           ];
         });
 
@@ -319,35 +408,87 @@ export function exportTournamentToPDF(tournament: Tournament): void {
     doc.text('DETAIL HASIL PERTANDINGAN', 15, currentY);
     currentY += 4;
 
-    const rrMatches = div.roundRobinMatches;
+    const rrMatches = div.roundRobinMatches || [];
     const koMatches = div.knockoutStage?.matches || [];
-    
+
     const allMatchesList: { type: string; info: string; team1: string; team2: string; score: string; winner: string; status: string }[] = [];
 
     rrMatches.forEach(m => {
-      const t1 = div.entries.find(e => e.id === m.entryId1);
-      const t2 = div.entries.find(e => e.id === m.entryId2);
+      const t1 = resolveEntryById(m.entryId1, entryMap, allEntriesMap);
+      const t2 = resolveEntryById(m.entryId2, entryMap, allEntriesMap);
+
+      if (m.entryId1 && !t1 && m.entryId1 !== 'BYE') {
+        integrityWarnings.push(`Match RR ${m.id}: entryId1 tidak ditemukan: ${m.entryId1}`);
+      }
+      if (m.entryId2 && !t2 && m.entryId2 !== 'BYE') {
+        integrityWarnings.push(`Match RR ${m.id}: entryId2 tidak ditemukan: ${m.entryId2}`);
+      }
+
+      let winnerStr = '-';
+      if (m.status === 'selesai' || m.status === 'walkover') {
+        if (m.winnerId) {
+          const winner = resolveEntryById(m.winnerId, entryMap, allEntriesMap);
+          if (!winner) {
+            integrityWarnings.push(`Match RR ${m.id}: winnerId tidak ditemukan: ${m.winnerId}`);
+            winnerStr = `Peserta tidak ditemukan [${m.winnerId}]`;
+          } else {
+            winnerStr = formatEntryName(winner);
+          }
+        } else {
+          winnerStr = 'Pemenang belum tercatat';
+        }
+      }
+
+      const team1Str = t1 ? formatEntryName(t1) : (m.entryId1 === 'BYE' ? 'BYE' : (m.entryId1 ? `Peserta tidak ditemukan [${m.entryId1}]` : '-'));
+      const team2Str = t2 ? formatEntryName(t2) : (m.entryId2 === 'BYE' ? 'BYE' : (m.entryId2 ? `Peserta tidak ditemukan [${m.entryId2}]` : '-'));
+
       allMatchesList.push({
         type: 'Round Robin',
-        info: sanitizePdfText(m.groupName) || 'Grup',
-        team1: getEntryName(t1),
-        team2: getEntryName(t2),
+        info: m.groupName ? sanitizePdfText(m.groupName) : 'Grup',
+        team1: team1Str,
+        team2: team2Str,
         score: formatScore(m),
-        winner: getWinnerLabel(m, div.entries),
+        winner: winnerStr,
         status: m.status === 'selesai' ? 'Selesai' : (m.status === 'walkover' ? 'Walkover (W/O)' : 'Belum Dimainkan')
       });
     });
 
     koMatches.forEach(m => {
-      const t1 = m.entryId1 === 'BYE' ? { id: 'BYE', name1: 'BYE' } : div.entries.find(e => e.id === m.entryId1);
-      const t2 = m.entryId2 === 'BYE' ? { id: 'BYE', name1: 'BYE' } : div.entries.find(e => e.id === m.entryId2);
+      const t1 = resolveEntryById(m.entryId1, entryMap, allEntriesMap);
+      const t2 = resolveEntryById(m.entryId2, entryMap, allEntriesMap);
+
+      if (m.entryId1 && !t1 && m.entryId1 !== 'BYE') {
+        integrityWarnings.push(`Match KO ${m.id}: entryId1 tidak ditemukan: ${m.entryId1}`);
+      }
+      if (m.entryId2 && !t2 && m.entryId2 !== 'BYE') {
+        integrityWarnings.push(`Match KO ${m.id}: entryId2 tidak ditemukan: ${m.entryId2}`);
+      }
+
+      let winnerStr = '-';
+      if (m.status === 'selesai' || m.status === 'walkover') {
+        if (m.winnerId) {
+          const winner = resolveEntryById(m.winnerId, entryMap, allEntriesMap);
+          if (!winner) {
+            integrityWarnings.push(`Match KO ${m.id}: winnerId tidak ditemukan: ${m.winnerId}`);
+            winnerStr = `Peserta tidak ditemukan [${m.winnerId}]`;
+          } else {
+            winnerStr = formatEntryName(winner);
+          }
+        } else {
+          winnerStr = 'Pemenang belum tercatat';
+        }
+      }
+
+      const team1Str = t1 ? formatEntryName(t1) : (m.entryId1 === 'BYE' ? 'BYE' : (m.entryId1 ? `Peserta tidak ditemukan [${m.entryId1}]` : '-'));
+      const team2Str = t2 ? formatEntryName(t2) : (m.entryId2 === 'BYE' ? 'BYE' : (m.entryId2 ? `Peserta tidak ditemukan [${m.entryId2}]` : '-'));
+
       allMatchesList.push({
         type: 'Knockout',
-        info: sanitizePdfText(m.roundName) || 'Fase Gugur',
-        team1: getEntryName(t1 as any),
-        team2: getEntryName(t2 as any),
+        info: m.roundName ? sanitizePdfText(m.roundName) : 'Fase Gugur',
+        team1: team1Str,
+        team2: team2Str,
         score: formatScore(m),
-        winner: getWinnerLabel(m, div.entries),
+        winner: winnerStr,
         status: m.status === 'selesai' ? 'Selesai' : (m.status === 'walkover' ? 'Walkover (W/O)' : 'Belum Dimainkan')
       });
     });
@@ -395,11 +536,13 @@ export function exportTournamentToPDF(tournament: Tournament): void {
     }
   });
 
+  // Log integrity warnings if any
+  if (integrityWarnings.length > 0) {
+    console.warn('PDF DATA INTEGRITY WARNINGS:', integrityWarnings);
+  }
+
   // --- FINAL PASS: DRAW HEADER ACCENT AND FOOTER WITH SINGLE SOURCE OF TRUTH PAGE NUMBERS ---
   const totalPages = doc.getNumberOfPages();
-  const dateStr = date
-    ? new Date(date).toLocaleDateString('id-ID', { year: 'numeric', month: 'long', day: 'numeric' })
-    : '';
 
   for (let i = 1; i <= totalPages; i++) {
     doc.setPage(i);
@@ -419,7 +562,7 @@ export function exportTournamentToPDF(tournament: Tournament): void {
     doc.line(15, 282, 195, 282);
 
     // Footer text
-    doc.text(`${sanitizedTitle}${dateStr ? ` - ${sanitizePdfText(dateStr)}` : ''}`, 15, 287);
+    doc.text(`${sanitizedTitle}${formattedDate !== '-' ? ` - ${sanitizePdfText(formattedDate)}` : ''}`, 15, 287);
     const pageStr = `Halaman ${i} dari ${totalPages}`;
     doc.text(pageStr, 195, 287, { align: 'right' });
   }
@@ -428,3 +571,4 @@ export function exportTournamentToPDF(tournament: Tournament): void {
   const filename = `Laporan_Turnamen_${sanitizedTitle.replace(/[^a-zA-Z0-9]/g, '_') || 'Pickleball'}.pdf`;
   doc.save(filename);
 }
+
